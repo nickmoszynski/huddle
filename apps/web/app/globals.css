@@ -1,0 +1,55 @@
+/**
+ * CSS var mirror of packages/brand/src/tokens.ts (handoff §5). Rebranding
+ * or retheming means editing values in BOTH places — tokens.ts is the
+ * source of truth for non-CSS consumers (TS, worker), this file is what
+ * Tailwind and plain CSS actually read.
+ */
+:root {
+  --bg: #000000;
+  --s1: #121315;
+  --s2: #1a1b1e;
+  --s3: #26272b;
+  --line: rgba(255, 255, 255, 0.08);
+  --line2: rgba(255, 255, 255, 0.15);
+  --tx: #f5f5f2;
+  --mu: #8e8f95;
+  --mu2: #5e5f65;
+  --ac: #3de07f;
+  --ac-ink: #03140a;
+  --ac-soft: rgba(61, 224, 127, 0.1);
+  --live: #ff4538;
+  --gold: #f2d04b;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  padding: 0;
+  margin: 0;
+  background: var(--bg);
+  color: var(--tx);
+}
+
+body {
+  font-family: var(--font-ui), sans-serif;
+  -webkit-font-smoothing: antialiased;
+  min-height: 100dvh;
+}
+
+.font-tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

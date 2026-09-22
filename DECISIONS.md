@@ -1,0 +1,14 @@
+# DECISIONS
+
+Every deviation from `CLAUDE_CODE_HANDOFF.md` / `CLAUDE_CODE_BUILD_PROMPT.md`, with reasoning. Newest first.
+
+## 2026-09-22 — Phases 0–1 scaffold
+
+- **No `huddle.html` prototype file was provided this session** — only the two concept board images (`design/boards/board-1-onboarding-social.png`, `board-2-room-core.png`) and the two handoff docs. The boards and the written design system in handoff §5 were used as the visual source of truth instead. Once `huddle.html` is added to the repo, run a pass comparing every route against it per the Implementation Rules (Playwright screenshots at 393×852) and correct any drift — the prototype outranks the boards and this scaffold on conflicts.
+- **Icons are placeholders.** `apps/web/public/icons/*.png` are generated programmatically (accent-green ring + "H" mark on black) so the PWA manifest is valid, not final brand assets.
+- **`FEED_PROVIDER=sportsdataio`/`sportradar` throw a clear error rather than silently falling back to mock.** No sports-data license exists yet (non-technical dependency, handoff §19); the interface (`packages/shared/src/feed/types.ts`) is ready for a real implementation to drop in behind it.
+- **`packages/db` migrations are not yet generated/applied.** `drizzle-kit generate` needs to run once a real `DATABASE_URL` (Supabase) is available; the schema (`packages/db/src/schema.ts`) is complete against handoff §8 but RLS policies are Supabase SQL, not modeled in Drizzle.
+- **Worker (`apps/worker`) only implements the feed ingestor + moment detector this phase.** Pick resolver, bet-leg tracker, clip composer (FFmpeg), and crowd-pulse aggregator are stubbed with TODOs in `src/index.ts`, arriving in Phases 6, 8, 5, and 10 respectively per the build order.
+- **`lucide-react` added to `packages/ui`** for iconography (mic/camera/connection/lock/etc.) — not named in the handoff stack list, but needed for the primitives and is small/tree-shakeable. Flagging as an addition, not a substitution.
+- **Auth (Supabase Auth), LiveKit, and Realtime are not wired up yet** — Phase 0–1 scope per the build prompt is design tokens, UI primitives, DB schema, and the mock feed only. `/login`, `/r/[code]`, etc. routes land in Phase 2–3.
+- **Verified `pnpm build` in the dev sandbox by temporarily stubbing `app/fonts.ts`.** The sandbox's outbound network policy blocks `fonts.googleapis.com` (confirmed via the proxy status endpoint — not a code issue), so `next/font/google` can't fetch Big Shoulders Display/Instrument Sans there. Swapped in a no-op stub, ran `pnpm build` (all routes compiled and prerendered cleanly), then restored the real `next/font/google` implementation, which is what's committed. Any normal dev machine or CI (Netlify/Vercel) has unrestricted access to Google Fonts, so this needs no further action — just flagging in case a *future* sandboxed CI run hits the same block and looks like a broken build.

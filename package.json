@@ -1,0 +1,21 @@
+{
+  "name": "huddle-monorepo",
+  "private": true,
+  "version": "0.1.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "packageManager": "pnpm@10.28.0",
+  "scripts": {
+    "dev": "pnpm --filter @huddle/web dev",
+    "build": "pnpm --filter @huddle/web build",
+    "lint": "pnpm -r --if-present lint",
+    "typecheck": "pnpm -r --if-present typecheck",
+    "worker:mock": "pnpm --filter @huddle/worker mock",
+    "db:generate": "pnpm --filter @huddle/db generate",
+    "db:migrate": "pnpm --filter @huddle/db migrate"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["esbuild", "sharp", "unrs-resolver"]
+  }
+}
