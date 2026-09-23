@@ -5,13 +5,28 @@ import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { brand } from "@huddle/brand";
 import { Button, Pill, TabBar, type BottomTab } from "@huddle/ui";
-import type { ScheduleResponse } from "./api/schedule/route";
+import type { ScheduleGame, ScheduleResponse } from "./api/schedule/route";
+
+/** Builds the /create URL, carrying the real game details along as query
+ * params so the room that gets created there is tied to a real event
+ * (see apps/web/app/api/rooms/route.ts). */
+function createRoomUrlForGame(game: ScheduleGame): string {
+  const params = new URLSearchParams({
+    providerEventId: game.id,
+    homeAbbr: game.homeAbbr,
+    awayAbbr: game.awayAbbr,
+    homeName: game.homeTeam,
+    awayName: game.awayTeam,
+    startTime: game.dateISO,
+  });
+  return `/create?${params.toString()}`;
+}
 
 /**
  * Home — hero, CTAs, tonight's event, crew strip, sign-off tagline
  * (handoff §3.1 / board 1 "1. HOME"). Full routing (Sign in gate, Groups,
  * Explore, Profile pages) still lands in Phase 2 proper; Start/Join/Start
- * watch party now route into the mocked room shell (see DECISIONS.md).
+ * watch party route into real, database-backed rooms now (see DECISIONS.md).
  */
 
 async function fetchSchedule(): Promise<ScheduleResponse> {
@@ -75,7 +90,7 @@ export default function HomePage() {
                 variant="primary"
                 fullWidth
                 className="mt-3 h-11"
-                onClick={() => router.push(`/create?game=${encodeURIComponent(gameLabel ?? "")}`)}
+                onClick={() => router.push(createRoomUrlForGame(game))}
               >
                 Start watch party
               </Button>

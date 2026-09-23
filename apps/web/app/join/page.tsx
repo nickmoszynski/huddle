@@ -3,12 +3,13 @@
 import { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@huddle/ui";
-import { useMockRoomStore } from "@/lib/mockRooms";
+import { getStoredDisplayName, storeDisplayName } from "@/lib/guestName";
 
 /**
- * Join a room by code. Phase 2 routing/UI shell — see DECISIONS.md: without
- * Supabase Realtime, this only works if the room was created on this same
- * device/browser; it can't reach a room someone else actually started.
+ * Join a room by code — for real now (see DECISIONS.md). No auth needed:
+ * joining creates a `guest_sessions` row and seats you as a participant via
+ * /api/rooms/[code]. Works for any room that actually exists in the
+ * database, created from any device.
  */
 export default function JoinRoomPage() {
   return (
@@ -23,17 +24,33 @@ function JoinRoomForm() {
   const searchParams = useSearchParams();
   const prefillCode = searchParams.get("code") ?? "";
 
-  const ensureRoom = useMockRoomStore((s) => s.ensureRoom);
-  const storedName = useMockRoomStore((s) => s.guestName);
-  const [name, setName] = useState(storedName ?? "");
+  const [name, setName] = useState(() => getStoredDisplayName());
   const [code, setCode] = useState(prefillCode.toUpperCase());
+  const [status, setStatus] = useState<"idle" | "working" | "error">("idle");
+  const [error, setError] = useState<string | null>(null);
 
-  function handleJoin() {
+  async function handleJoin() {
     const roomCode = code.trim().toUpperCase();
     if (!roomCode) return;
-    const guestName = name.trim() || "You";
-    ensureRoom(roomCode, guestName);
-    router.push(`/r/${roomCode}`);
+    const displayName = name.trim() || "You";
+
+    setStatus("working");
+    setError(null);
+    try {
+      storeDisplayName(displayName);
+      const res = await fetch(`/api/rooms/${roomCode}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ displayName }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error ?? "Could not join that room.");
+
+      router.push(`/r/${data.code}?pid=${data.participantId}`);
+    } catch (err) {
+      setStatus("error");
+      setError(err instanceof Error ? err.message : "Something went wrong.");
+    }
   }
 
   return (
@@ -68,13 +85,24 @@ function JoinRoomForm() {
         className="mt-2 h-[52px] rounded-control border border-line2 bg-s2 px-4 font-ui text-[20px] font-bold uppercase tracking-[0.2em] text-tx outline-none placeholder:font-bold placeholder:tracking-[0.2em] placeholder:text-mu2 focus:border-ac"
       />
 
-      <Button variant="primary" fullWidth className="mt-8" onClick={handleJoin} disabled={!code.trim()}>
-        Join room
+      <Button
+        variant="primary"
+        fullWidth
+        className="mt-8"
+        onClick={handleJoin}
+        disabled={!code.trim() || status === "working"}
+      >
+        {status === "working" ? "Joining…" : "Join room"}
       </Button>
 
+      {error && (
+        <p className="mt-4 rounded-control border border-live/30 bg-live/10 p-3 font-ui text-[13px] text-live">
+          {error}
+        </p>
+      )}
+
       <p className="mt-4 font-ui text-[12px] text-mu2">
-        Only works for rooms created on this device for now — joining a friend&apos;s real room needs Supabase
-        Realtime, which isn&apos;t wired up yet.
+        Works for any room that's actually been created — including from a friend's phone.
       </p>
     </div>
   );

@@ -3,12 +3,16 @@
 import { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@huddle/ui";
-import { useMockRoomStore } from "@/lib/mockRooms";
+import { ensureAnonymousUserId } from "@/lib/supabaseClient";
+import { getStoredDisplayName, storeDisplayName } from "@/lib/guestName";
 
 /**
- * Start a room. Phase 2 routing/UI shell — see DECISIONS.md: there's no
- * Supabase Auth/Realtime yet, so this generates a room code held only in
- * this browser (via zustand + localStorage), not a real backend room.
+ * Start a room — for real now (see DECISIONS.md, "Real rooms via
+ * Supabase"). Creating a room needs a host with a lightweight `users` row
+ * (the schema requires it), so this signs the host in anonymously via
+ * Supabase Auth first — no email/password, just a name — then creates the
+ * room in the actual database via /api/rooms. Requires Anonymous Sign-Ins
+ * to be turned on in Supabase (Authentication -> Sign In / Providers).
  */
 export default function CreateRoomPage() {
   return (
@@ -21,16 +25,47 @@ export default function CreateRoomPage() {
 function CreateRoomForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const gameLabel = searchParams.get("game") ?? undefined;
 
-  const createRoom = useMockRoomStore((s) => s.createRoom);
-  const storedName = useMockRoomStore((s) => s.guestName);
-  const [name, setName] = useState(storedName ?? "");
+  const providerEventId = searchParams.get("providerEventId");
+  const homeAbbr = searchParams.get("homeAbbr");
+  const awayAbbr = searchParams.get("awayAbbr");
+  const homeName = searchParams.get("homeName");
+  const awayName = searchParams.get("awayName");
+  const startTime = searchParams.get("startTime");
+  const hasGame = Boolean(providerEventId && homeAbbr && awayAbbr && homeName && awayName && startTime);
+  const gameLabel = hasGame ? `${awayName} @ ${homeName}` : undefined;
 
-  function handleCreate() {
-    const hostName = name.trim() || "You";
-    const code = createRoom({ hostName, gameLabel });
-    router.push(`/r/${code}`);
+  const [name, setName] = useState(() => getStoredDisplayName());
+  const [status, setStatus] = useState<"idle" | "working" | "error">("idle");
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleCreate() {
+    const displayName = name.trim() || "You";
+    setStatus("working");
+    setError(null);
+    try {
+      const authUserId = await ensureAnonymousUserId();
+      storeDisplayName(displayName);
+
+      const res = await fetch("/api/rooms", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          authUserId,
+          displayName,
+          game: hasGame
+            ? { providerEventId, homeAbbr, awayAbbr, homeName, awayName, startTimeISO: startTime }
+            : undefined,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error ?? "Could not create the room.");
+
+      router.push(`/r/${data.code}?pid=${data.participantId}`);
+    } catch (err) {
+      setStatus("error");
+      setError(err instanceof Error ? err.message : "Something went wrong.");
+    }
   }
 
   return (
@@ -54,13 +89,18 @@ function CreateRoomForm() {
         className="mt-2 h-[52px] rounded-control border border-line2 bg-s2 px-4 font-ui text-[15px] text-tx outline-none placeholder:text-mu2 focus:border-ac"
       />
 
-      <Button variant="primary" fullWidth className="mt-8" onClick={handleCreate}>
-        Create room
+      <Button variant="primary" fullWidth className="mt-8" onClick={handleCreate} disabled={status === "working"}>
+        {status === "working" ? "Creating…" : "Create room"}
       </Button>
 
+      {error && (
+        <p className="mt-4 rounded-control border border-live/30 bg-live/10 p-3 font-ui text-[13px] text-live">
+          {error}
+        </p>
+      )}
+
       <p className="mt-4 font-ui text-[12px] text-mu2">
-        This creates a room code on this device. Real cross-device syncing needs Supabase Realtime, which isn&apos;t
-        wired up yet.
+        This creates a real room in the database that anyone with the code can join from any device.
       </p>
     </div>
   );

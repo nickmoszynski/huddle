@@ -38,6 +38,8 @@ export interface ScheduleGame {
   detail: string;
   homeTeam: string;
   awayTeam: string;
+  homeAbbr: string;
+  awayAbbr: string;
 }
 
 export interface ScheduleResponse {
@@ -68,6 +70,8 @@ export async function GET() {
         detail: e.status?.type?.shortDetail ?? "",
         homeTeam: home?.team?.shortDisplayName ?? home?.team?.displayName ?? "Home",
         awayTeam: away?.team?.shortDisplayName ?? away?.team?.displayName ?? "Away",
+        homeAbbr: home?.team?.abbreviation ?? "HOME",
+        awayAbbr: away?.team?.abbreviation ?? "AWAY",
       };
     });
 
