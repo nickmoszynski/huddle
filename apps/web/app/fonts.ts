@@ -1,7 +1,7 @@
-import { Big_Shoulders_Display, Instrument_Sans } from "next/font/google";
+import { Big_Shoulders, Instrument_Sans } from "next/font/google";
 
 // Display = Big Shoulders Display 800-900, uppercase, lh .88 (handoff §5).
-export const bigShoulders = Big_Shoulders_Display({
+export const bigShoulders = Big_Shoulders({
   subsets: ["latin"],
   weight: ["800", "900"],
   variable: "--font-display",
