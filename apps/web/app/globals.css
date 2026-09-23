@@ -4,6 +4,9 @@
  * source of truth for non-CSS consumers (TS, worker), this file is what
  * Tailwind and plain CSS actually read.
  */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
 :root {
   --bg: #000000;
   --s1: #121315;
