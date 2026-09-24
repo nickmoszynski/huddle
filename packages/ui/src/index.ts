@@ -14,3 +14,4 @@ export * from "./BetTicket";
 export * from "./Leaderboard";
 export * from "./MomentSavedCard";
 export * from "./TabBar";
+export * from "./ChatPanel";

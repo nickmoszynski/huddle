@@ -6,7 +6,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Track } from "livekit-client";
 import { LiveKitRoom, RoomAudioRenderer, VideoTrack, useLocalParticipant, useTracks } from "@livekit/components-react";
 import { Mic, MicOff, Video, VideoOff } from "lucide-react";
-import { Button, Pill, VideoTile } from "@huddle/ui";
+import { Button, ChatPanel, Pill, VideoTile, type ChatMessageItem } from "@huddle/ui";
 import { getSupabaseBrowserClient } from "@/lib/supabaseClient";
 
 /**
@@ -29,7 +29,18 @@ import { getSupabaseBrowserClient } from "@/lib/supabaseClient";
  * POSTs to /api/rooms/[code]/state (so everyone else's tile updates via
  * the same Realtime path joins/leaves already use) — two separate systems,
  * kept in sync by this one call site rather than by LiveKit and Postgres
- * somehow agreeing on their own. Chat still isn't wired up.
+ * somehow agreeing on their own.
+ *
+ * Chat (see DECISIONS.md, "In-room chat") is a second, independent
+ * Realtime subscription on the same channel/`messages` table — same
+ * public-read-for-realtime pattern as 0002, added in migration 0004. Only
+ * shown once you've joined (myParticipantId set), same gate as video.
+ * "Is this my own message" is tracked client-side by the ids returned from
+ * my own successful sends (`myMessageIds`), not by matching sender_id —
+ * simpler, but means your own messages from a *previous* page load (e.g.
+ * after a refresh) show up unstyled as "someone else's" until you send a
+ * new one. A minor cosmetic gap, not a functional one — fine for a first
+ * pass.
  */
 
 interface RoomParticipant {
@@ -57,6 +68,14 @@ interface LiveKitTokenResponse {
   serverUrl: string;
 }
 
+interface RawMessage {
+  id: string;
+  senderName: string;
+  text: string;
+  kind: string;
+  createdAtISO: string;
+}
+
 async function fetchRoom(code: string): Promise<RoomResponse> {
   const res = await fetch(`/api/rooms/${code}`);
   const data = await res.json();
@@ -73,6 +92,13 @@ async function fetchLiveKitToken(code: string, participantId: string): Promise<L
   const data = await res.json();
   if (!res.ok) throw new Error(data?.error ?? "Could not start video/audio.");
   return data;
+}
+
+async function fetchMessages(code: string): Promise<RawMessage[]> {
+  const res = await fetch(`/api/rooms/${code}/messages`);
+  const data = await res.json();
+  if (!res.ok) throw new Error(data?.error ?? "Could not load chat.");
+  return data.messages;
 }
 
 export default function RoomPage() {
@@ -92,6 +118,9 @@ function RoomView() {
 
   const [copied, setCopied] = useState(false);
   const [leaving, setLeaving] = useState(false);
+  const [chatInput, setChatInput] = useState("");
+  const [sendingChat, setSendingChat] = useState(false);
+  const [myMessageIds, setMyMessageIds] = useState<Set<string>>(new Set());
   const queryClient = useQueryClient();
 
   const { data, isLoading, error } = useQuery({
@@ -103,11 +132,20 @@ function RoomView() {
 
   const roomId = data?.room.id;
 
-  // Live updates: subscribe to changes on this room's participants and
-  // refetch immediately when someone joins/leaves/toggles mic or camera,
-  // instead of waiting on the slow poll above. Requires the "Public read
-  // (realtime)" policy from migration 0002 — without it Realtime silently
-  // delivers nothing.
+  // Chat history — refetchInterval here is the same belt-and-suspenders
+  // safety net as the room poll above, in case the Realtime subscription
+  // below silently drops; new messages normally arrive via that instead.
+  const { data: rawMessages } = useQuery({
+    queryKey: ["messages", code],
+    queryFn: () => fetchMessages(code),
+    refetchInterval: 15000,
+  });
+
+  // Live updates: subscribe to changes on this room's participants (join/
+  // leave/mic/camera) and to new chat messages, on one channel. Requires
+  // the "Public read (realtime)" policies from migrations 0002 (rooms/
+  // room_participants) and 0004 (messages) — without them Realtime
+  // silently delivers nothing.
   useEffect(() => {
     if (!roomId) return;
 
@@ -115,7 +153,7 @@ function RoomView() {
     try {
       supabase = getSupabaseBrowserClient();
     } catch {
-      return; // Supabase env vars missing — safety-net poll still works
+      return; // Supabase env vars missing — safety-net polls still work
     }
 
     const channel = supabase
@@ -125,6 +163,27 @@ function RoomView() {
         { event: "*", schema: "public", table: "room_participants", filter: `room_id=eq.${roomId}` },
         () => {
           queryClient.invalidateQueries({ queryKey: ["room", code] });
+        }
+      )
+      .on(
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: "messages", filter: `room_id=eq.${roomId}` },
+        (payload) => {
+          const row = payload.new as {
+            id: string;
+            sender_name: string;
+            text: string;
+            kind: string;
+            created_at: string;
+          };
+          queryClient.setQueryData<RawMessage[]>(["messages", code], (prev) => {
+            const next = prev ?? [];
+            if (next.some((m) => m.id === row.id)) return next; // already have it (e.g. our own send below)
+            return [
+              ...next,
+              { id: row.id, senderName: row.sender_name, text: row.text, kind: row.kind, createdAtISO: row.created_at },
+            ];
+          });
         }
       )
       .subscribe();
@@ -153,6 +212,37 @@ function RoomView() {
       setTimeout(() => setCopied(false), 1500);
     } catch {
       // Clipboard API unavailable — the code is already visible on screen.
+    }
+  }
+
+  async function handleSendChat() {
+    const text = chatInput.trim();
+    if (!text || !myParticipantId) return;
+    setChatInput("");
+    setSendingChat(true);
+    try {
+      const res = await fetch(`/api/rooms/${code}/messages`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ participantId: myParticipantId, text }),
+      });
+      const resData = await res.json();
+      if (res.ok && resData.message) {
+        setMyMessageIds((prev) => new Set(prev).add(resData.message.id));
+        // Append immediately rather than waiting on the Realtime round-trip
+        // (which will also deliver this same insert — the dedup check in
+        // that handler above is what keeps this from showing up twice).
+        queryClient.setQueryData<RawMessage[]>(["messages", code], (prev) => {
+          const next = prev ?? [];
+          if (next.some((m) => m.id === resData.message.id)) return next;
+          return [...next, resData.message];
+        });
+      }
+    } catch {
+      // Best-effort — the safety-net poll above will pick it up if this
+      // silently failed to reach the server but actually landed.
+    } finally {
+      setSendingChat(false);
     }
   }
 
@@ -245,12 +335,31 @@ function RoomView() {
         </div>
       )}
 
-      <div className="mt-8 rounded-tile border border-line bg-s1 p-4">
+      {myParticipantId && (
+        <ChatPanel
+          className="mt-6"
+          messages={(rawMessages ?? []).map(
+            (m): ChatMessageItem => ({
+              id: m.id,
+              senderName: m.senderName,
+              text: m.text,
+              kind: m.kind,
+              isMe: myMessageIds.has(m.id),
+            })
+          )}
+          value={chatInput}
+          onChange={setChatInput}
+          onSend={handleSendChat}
+          sending={sendingChat}
+        />
+      )}
+
+      <div className="mt-6 rounded-tile border border-line bg-s1 p-4">
         <Pill tone="neutral">Preview</Pill>
         <p className="mt-2 font-ui text-[13px] text-mu">
           {myParticipantId
-            ? `This room is real — anyone with the code ${code} can join it from any device. Turn on your mic and camera above to be seen and heard. Chat isn't connected yet.`
-            : `This room is real — anyone with the code ${code} can join it from any device, and the list above updates live. Join to turn on your mic and camera.`}
+            ? `This room is real — anyone with the code ${code} can join it from any device. Turn on your mic and camera above to be seen and heard, and chat below.`
+            : `This room is real — anyone with the code ${code} can join it from any device, and the list above updates live. Join to turn on your mic and camera, and to chat.`}
         </p>
       </div>
 
