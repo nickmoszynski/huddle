@@ -2,14 +2,20 @@
 
 import { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Button } from "@huddle/ui";
+import { Avatar, Button } from "@huddle/ui";
 import { getStoredDisplayName, storeDisplayName } from "@/lib/guestName";
+import { useSession } from "@/lib/session";
 
 /**
  * Join a room by code — for real now (see DECISIONS.md). No auth needed:
  * joining creates a `guest_sessions` row and seats you as a participant via
  * /api/rooms/[code]. Works for any room that actually exists in the
  * database, created from any device.
+ *
+ * If you've already claimed a username, this skips asking for your name —
+ * same reasoning as /create. Joining still works with zero sign-in at all
+ * (that's the point of guest_sessions), this just avoids re-asking someone
+ * who's already told the app who they are.
  */
 export default function JoinRoomPage() {
   return (
@@ -24,6 +30,7 @@ function JoinRoomForm() {
   const searchParams = useSearchParams();
   const prefillCode = searchParams.get("code") ?? "";
 
+  const { isSignedIn, user } = useSession();
   const [name, setName] = useState(() => getStoredDisplayName());
   const [code, setCode] = useState(prefillCode.toUpperCase());
   const [status, setStatus] = useState<"idle" | "working" | "error">("idle");
@@ -32,7 +39,7 @@ function JoinRoomForm() {
   async function handleJoin() {
     const roomCode = code.trim().toUpperCase();
     if (!roomCode) return;
-    const displayName = name.trim() || "You";
+    const displayName = isSignedIn && user ? user.displayName : name.trim() || "You";
 
     setStatus("working");
     setError(null);
@@ -61,17 +68,29 @@ function JoinRoomForm() {
 
       <h1 className="font-display text-[34px] font-extrabold uppercase leading-none text-tx">Join a room</h1>
 
-      <label className="mt-8 font-ui text-[13px] font-bold uppercase tracking-[0.06em] text-mu" htmlFor="guest-name">
-        Your name
-      </label>
-      <input
-        id="guest-name"
-        value={name}
-        onChange={(e) => setName(e.target.value)}
-        placeholder="Nick"
-        maxLength={40}
-        className="mt-2 h-[52px] rounded-control border border-line2 bg-s2 px-4 font-ui text-[15px] text-tx outline-none placeholder:text-mu2 focus:border-ac"
-      />
+      {isSignedIn && user ? (
+        <div className="mt-8 flex items-center gap-3 rounded-tile border border-line bg-s1 p-4">
+          <Avatar name={user.displayName} size={40} />
+          <div>
+            <p className="font-ui text-[13px] text-mu">Joining as</p>
+            <p className="font-ui text-[15px] font-semibold text-tx">{user.displayName}</p>
+          </div>
+        </div>
+      ) : (
+        <>
+          <label className="mt-8 font-ui text-[13px] font-bold uppercase tracking-[0.06em] text-mu" htmlFor="guest-name">
+            Your name
+          </label>
+          <input
+            id="guest-name"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Nick"
+            maxLength={40}
+            className="mt-2 h-[52px] rounded-control border border-line2 bg-s2 px-4 font-ui text-[15px] text-tx outline-none placeholder:text-mu2 focus:border-ac"
+          />
+        </>
+      )}
 
       <label className="mt-6 font-ui text-[13px] font-bold uppercase tracking-[0.06em] text-mu" htmlFor="room-code">
         Room code
