@@ -40,9 +40,11 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ cod
         name: row.room.name,
         status: row.room.status,
         event: {
+          providerEventId: row.event.providerEventId,
           homeName: row.event.homeName,
           awayName: row.event.awayName,
           startTimeISO: row.event.startTime.toISOString(),
+          league: row.event.league,
         },
       },
       participants,

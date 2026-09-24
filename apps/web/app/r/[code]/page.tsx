@@ -5,18 +5,23 @@ import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Track } from "livekit-client";
 import { LiveKitRoom, RoomAudioRenderer, VideoTrack, useLocalParticipant, useTracks } from "@livekit/components-react";
-import { Mic, MicOff, Plus, Video, VideoOff, X } from "lucide-react";
+import { Check, ChevronLeft, Copy, Mic, MicOff, Plus, Video, VideoOff, X } from "lucide-react";
 import {
   Button,
   ChatPanel,
   Leaderboard,
   PickCard,
   Pill,
+  ScoreBug,
+  Segmented,
   VideoTile,
+  cn,
   type ChatMessageItem,
   type ChoiceOption,
 } from "@huddle/ui";
 import { getSupabaseBrowserClient } from "@/lib/supabaseClient";
+import { formatCountdown, useNow } from "@/lib/useCountdown";
+import type { ExploreGame, GamesResponse } from "@/app/api/games/route";
 
 /**
  * The room screen — backed by the real database now (see DECISIONS.md,
@@ -61,6 +66,20 @@ import { getSupabaseBrowserClient } from "@/lib/supabaseClient";
  * column to filter Realtime's subscription on directly, so this just
  * refetches the whole picks list on any change to any of the three
  * tables. Fine at this scale; revisit if a room ever has dozens of picks.
+ *
+ * Layout (see DECISIONS.md, "Room screen: tabbed Live/Chat/Picks"): this
+ * used to be one long stacked scroll — video grid, then chat, then picks,
+ * all always on screen at once. Rewritten into Live/Chat/Picks tabs (a
+ * `Segmented`, matching the pill-tab language Explore already uses) so it
+ * reads as one focused screen instead of a scavenger hunt. Only the
+ * active tab's content shows — except the LiveKit connection itself,
+ * which stays mounted the whole time and is only hidden/shown with CSS
+ * (unmounting `<LiveKitRoom>` on a tab switch would drop the call). A
+ * `ScoreBug` up top shows the live score when this room's event is a
+ * real, currently-live NFL/MLB game (matched via `providerEventId`
+ * against `/api/games` — the same lookup Explore uses to nest rooms under
+ * games); it quietly doesn't render for WWE, an ad hoc room, or a game
+ * that hasn't started, rather than showing a fake 0-0.
  */
 
 interface RoomParticipant {
@@ -78,7 +97,13 @@ interface RoomResponse {
     code: string;
     name: string;
     status: string;
-    event: { homeName: string; awayName: string; startTimeISO: string };
+    event: {
+      providerEventId: string;
+      homeName: string;
+      awayName: string;
+      startTimeISO: string;
+      league?: string | null;
+    };
   };
   participants: RoomParticipant[];
 }
@@ -143,6 +168,21 @@ async function fetchLiveKitToken(code: string, participantId: string): Promise<L
   return data;
 }
 
+/**
+ * Best-effort live score lookup for this room's game — reuses Explore's
+ * feed rather than a dedicated single-event endpoint. Only called for a
+ * room whose event has a `league` (NFL/MLB; WWE and ad hoc rooms don't),
+ * and it's fine if the match comes back empty (a game further out than
+ * the fetched window, or one that's already finished and dropped out of
+ * `/api/games`) — the caller just doesn't render a score bug.
+ */
+async function fetchMatchedGame(league: string, providerEventId: string): Promise<ExploreGame | undefined> {
+  const res = await fetch(`/api/games?league=${league}`);
+  if (!res.ok) return undefined;
+  const data: GamesResponse = await res.json();
+  return data.games.find((g) => g.id === providerEventId);
+}
+
 async function fetchMessages(code: string): Promise<RawMessage[]> {
   const res = await fetch(`/api/rooms/${code}/messages`);
   const data = await res.json();
@@ -178,13 +218,24 @@ function RoomView() {
   const [chatInput, setChatInput] = useState("");
   const [sendingChat, setSendingChat] = useState(false);
   const [myMessageIds, setMyMessageIds] = useState<Set<string>>(new Set());
+  const [tab, setTab] = useState<"live" | "chat" | "picks">("live");
   const queryClient = useQueryClient();
+  const now = useNow();
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["room", code],
     queryFn: () => fetchRoom(code),
     refetchInterval: 20000, // safety-net poll — Realtime (below) is the primary path
     retry: false,
+  });
+
+  const eventLeague = data?.room.event.league;
+  const eventProviderId = data?.room.event.providerEventId;
+  const { data: matchedGame } = useQuery({
+    queryKey: ["room-game", eventLeague, eventProviderId],
+    queryFn: () => fetchMatchedGame(eventLeague as string, eventProviderId as string),
+    enabled: !!eventLeague && !!eventProviderId,
+    refetchInterval: 30000,
   });
 
   const roomId = data?.room.id;
@@ -359,20 +410,52 @@ function RoomView() {
   }
 
   const { room, participants } = data;
+  const isHost = participants.find((p) => p.id === myParticipantId)?.role === "host";
 
   return (
-    <div className="flex min-h-dvh flex-col px-gutter pb-10 pt-14">
-      <div className="flex items-center justify-between">
-        <button onClick={handleLeave} className="font-ui text-[13px] font-semibold text-mu" disabled={leaving}>
-          &larr; Leave
+    <div className="flex min-h-dvh flex-col pb-10 pt-14">
+      <div className="flex items-center gap-2 px-gutter">
+        <button
+          onClick={handleLeave}
+          disabled={leaving}
+          aria-label="Leave room"
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-control text-mu disabled:opacity-40"
+        >
+          <ChevronLeft size={22} />
         </button>
-        <Pill tone="accent">{code}</Pill>
+        <p className="min-w-0 flex-1 truncate text-center font-ui text-[15px] font-semibold text-tx">{room.name}</p>
+        <div className="flex shrink-0 items-center gap-1.5">
+          <Pill tone="accent">{code}</Pill>
+          <button
+            onClick={handleCopy}
+            aria-label="Copy invite link"
+            className="flex h-9 w-9 items-center justify-center rounded-control bg-s1 text-mu"
+          >
+            {copied ? <Check size={16} className="text-ac" /> : <Copy size={16} />}
+          </button>
+        </div>
       </div>
 
-      <p className="mt-4 font-ui text-[15px] font-semibold text-tx">{room.name}</p>
+      {/* Live score when this room's event is a real, currently-live NFL/MLB
+       * game; a quiet kickoff line for one that hasn't started yet; nothing
+       * at all for WWE, an ad hoc room, or a game with no data to show. */}
+      {matchedGame?.state === "in" && matchedGame.awayScore != null && matchedGame.homeScore != null ? (
+        <ScoreBug
+          className="mx-gutter mt-3"
+          away={{ abbr: matchedGame.awayAbbr, score: matchedGame.awayScore, color: matchedGame.awayColor ?? "#8E8F95" }}
+          home={{ abbr: matchedGame.homeAbbr, score: matchedGame.homeScore, color: matchedGame.homeColor ?? "#8E8F95" }}
+          quarter={matchedGame.period ?? 1}
+          clock={matchedGame.clock ?? ""}
+          live
+        />
+      ) : matchedGame?.state === "pre" ? (
+        <p className="mx-gutter mt-3 font-ui text-[12px] text-mu">
+          {matchedGame.awayName} @ {matchedGame.homeName} &middot; kicks off in {formatCountdown(matchedGame.dateISO, now)}
+        </p>
+      ) : null}
 
       {!myParticipantId && (
-        <div className="mt-4 rounded-tile border border-line bg-s1 p-4">
+        <div className="mx-gutter mt-4 rounded-tile border border-line bg-s1 p-4">
           <p className="font-ui text-[13px] text-mu">You're viewing this room without having joined it.</p>
           <Button
             variant="primary"
@@ -385,70 +468,76 @@ function RoomView() {
         </div>
       )}
 
-      <Button variant="secondary" fullWidth className="mt-4" onClick={handleCopy}>
-        {copied ? "Invite link copied" : "Copy invite link"}
-      </Button>
+      {myParticipantId ? (
+        <>
+          <Segmented
+            className="mx-gutter mt-4"
+            options={[
+              { value: "live", label: "Live" },
+              { value: "chat", label: "Chat" },
+              { value: "picks", label: "Picks" },
+            ]}
+            value={tab}
+            onChange={setTab}
+          />
 
-      {myParticipantId && liveKit ? (
-        <LiveKitRoom
-          serverUrl={liveKit.serverUrl}
-          token={liveKit.token}
-          connect
-          audio={false}
-          video={false}
-          onError={(err) => console.error("[LiveKit] room connection error", err)}
-        >
-          <RoomAudioRenderer />
-          <LiveParticipantGrid participants={participants} myParticipantId={myParticipantId} code={code} />
-        </LiveKitRoom>
+          {/* Live pane — the LiveKit connection (once the token's in) stays
+           * mounted across tab switches, only hidden with CSS, so audio
+           * from a video call doesn't drop just because Chat or Picks is
+           * the visible tab right now. */}
+          <div className={cn("mx-gutter mt-4", tab !== "live" && "hidden")}>
+            {liveKit ? (
+              <LiveKitRoom
+                serverUrl={liveKit.serverUrl}
+                token={liveKit.token}
+                connect
+                audio={false}
+                video={false}
+                onError={(err) => console.error("[LiveKit] room connection error", err)}
+              >
+                <RoomAudioRenderer />
+                <LiveParticipantGrid participants={participants} myParticipantId={myParticipantId} code={code} />
+              </LiveKitRoom>
+            ) : (
+              <div className="grid grid-cols-2 gap-3">
+                {participants.map((p) => (
+                  <VideoTile key={p.id} name={p.displayName} micOn={p.micOn} camOn={p.camOn} conn={p.conn} />
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className={cn("mx-gutter mt-4 flex flex-1 flex-col", tab !== "chat" && "hidden")}>
+            <ChatPanel
+              className="flex-1"
+              messagesClassName="min-h-[50vh] flex-1"
+              messages={(rawMessages ?? []).map(
+                (m): ChatMessageItem => ({
+                  id: m.id,
+                  senderName: m.senderName,
+                  text: m.text,
+                  kind: m.kind,
+                  isMe: myMessageIds.has(m.id),
+                })
+              )}
+              value={chatInput}
+              onChange={setChatInput}
+              onSend={handleSendChat}
+              sending={sendingChat}
+            />
+          </div>
+
+          <div className={cn("mx-gutter mt-4", tab !== "picks" && "hidden")}>
+            <PicksSection code={code} myParticipantId={myParticipantId} isHost={isHost} data={picksData} />
+          </div>
+        </>
       ) : (
-        <div className="mt-8 grid grid-cols-2 gap-3">
+        <div className="mx-gutter mt-8 grid grid-cols-2 gap-3">
           {participants.map((p) => (
             <VideoTile key={p.id} name={p.displayName} micOn={p.micOn} camOn={p.camOn} conn={p.conn} />
           ))}
         </div>
       )}
-
-      {myParticipantId && (
-        <ChatPanel
-          className="mt-6"
-          messages={(rawMessages ?? []).map(
-            (m): ChatMessageItem => ({
-              id: m.id,
-              senderName: m.senderName,
-              text: m.text,
-              kind: m.kind,
-              isMe: myMessageIds.has(m.id),
-            })
-          )}
-          value={chatInput}
-          onChange={setChatInput}
-          onSend={handleSendChat}
-          sending={sendingChat}
-        />
-      )}
-
-      {myParticipantId && (
-        <PicksSection
-          code={code}
-          myParticipantId={myParticipantId}
-          isHost={participants.find((p) => p.id === myParticipantId)?.role === "host"}
-          data={picksData}
-        />
-      )}
-
-      <div className="mt-6 rounded-tile border border-line bg-s1 p-4">
-        <Pill tone="neutral">Preview</Pill>
-        <p className="mt-2 font-ui text-[13px] text-mu">
-          {myParticipantId
-            ? `This room is real — anyone with the code ${code} can join it from any device. Turn on your mic and camera above to be seen and heard, chat below, and the host can start picks.`
-            : `This room is real — anyone with the code ${code} can join it from any device, and the list above updates live. Join to turn on your mic and camera, chat, and answer picks.`}
-        </p>
-      </div>
-
-      <Button variant="danger" fullWidth className="mt-8" onClick={handleLeave} disabled={leaving}>
-        Leave room
-      </Button>
     </div>
   );
 }
@@ -513,7 +602,7 @@ function LiveParticipantGrid({
 
   return (
     <>
-      <div className="mt-8 grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-2 gap-3 pb-24">
         {participants.map((p) => {
           const isMe = p.id === myParticipantId;
           const trackRef = cameraTracks.find((t) => t.participant.identity === p.id);
@@ -530,25 +619,34 @@ function LiveParticipantGrid({
         })}
       </div>
 
-      <div className="mt-4 flex gap-3">
-        <Button
-          variant="secondary"
-          className="flex-1"
+      {/* Floating control pill, pinned to the bottom of the screen — matches
+       * the board's bottom cluster of circular controls rather than the two
+       * full-width labeled buttons this used to be. Red fill on mute/camera-
+       * off is the same "off" language VideoTile's own mic badge already
+       * uses, so muted-here and muted-on-your-tile always agree visually. */}
+      <div className="fixed inset-x-0 bottom-6 z-20 mx-auto flex w-fit items-center gap-3 rounded-pill border border-line bg-s1/95 p-2 backdrop-blur">
+        <button
           onClick={toggleMic}
           disabled={toggling}
-          icon={isMicrophoneEnabled ? <Mic size={18} /> : <MicOff size={18} />}
+          aria-label={isMicrophoneEnabled ? "Mute microphone" : "Unmute microphone"}
+          className={cn(
+            "flex h-12 w-12 items-center justify-center rounded-full transition-colors duration-fast ease-huddle disabled:opacity-40",
+            isMicrophoneEnabled ? "bg-s2 text-tx" : "bg-live text-white"
+          )}
         >
-          {isMicrophoneEnabled ? "Mute" : "Unmute"}
-        </Button>
-        <Button
-          variant="secondary"
-          className="flex-1"
+          {isMicrophoneEnabled ? <Mic size={20} /> : <MicOff size={20} />}
+        </button>
+        <button
           onClick={toggleCam}
           disabled={toggling}
-          icon={isCameraEnabled ? <Video size={18} /> : <VideoOff size={18} />}
+          aria-label={isCameraEnabled ? "Stop video" : "Start video"}
+          className={cn(
+            "flex h-12 w-12 items-center justify-center rounded-full transition-colors duration-fast ease-huddle disabled:opacity-40",
+            isCameraEnabled ? "bg-s2 text-tx" : "bg-live text-white"
+          )}
         >
-          {isCameraEnabled ? "Stop video" : "Start video"}
-        </Button>
+          {isCameraEnabled ? <Video size={20} /> : <VideoOff size={20} />}
+        </button>
       </div>
     </>
   );

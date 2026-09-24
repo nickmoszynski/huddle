@@ -24,9 +24,14 @@ export interface ChatPanelProps {
   onSend: () => void;
   sending?: boolean;
   className?: string;
+  /** Height of the scrolling message list. Defaults to a fixed `h-64` (the
+   * "chat as one section on a long page" size); pass something like
+   * `flex-1` when ChatPanel is the whole content of its own tab/pane and
+   * should fill the space it's given instead. */
+  messagesClassName?: string;
 }
 
-export function ChatPanel({ messages, value, onChange, onSend, sending, className }: ChatPanelProps) {
+export function ChatPanel({ messages, value, onChange, onSend, sending, className, messagesClassName }: ChatPanelProps) {
   const listRef = React.useRef<HTMLDivElement>(null);
 
   React.useEffect(() => {
@@ -41,7 +46,7 @@ export function ChatPanel({ messages, value, onChange, onSend, sending, classNam
 
   return (
     <div className={cn("flex flex-col rounded-tile border border-line bg-s1", className)}>
-      <div ref={listRef} className="flex h-64 flex-col gap-2 overflow-y-auto p-4">
+      <div ref={listRef} className={cn("flex flex-col gap-2 overflow-y-auto p-4", messagesClassName ?? "h-64")}>
         {messages.length === 0 ? (
           <p className="m-auto font-ui text-[13px] text-mu2">Say something to kick things off.</p>
         ) : (

@@ -34,13 +34,14 @@ type EspnLeague = keyof typeof ESPN_ENDPOINTS;
 
 interface EspnCompetitor {
   homeAway: "home" | "away";
-  team?: { displayName?: string; shortDisplayName?: string; abbreviation?: string };
+  score?: string;
+  team?: { displayName?: string; shortDisplayName?: string; abbreviation?: string; color?: string };
 }
 
 interface EspnEvent {
   id: string;
   date: string;
-  status?: { type?: { state?: string; shortDetail?: string } };
+  status?: { type?: { state?: string; shortDetail?: string }; period?: number; displayClock?: string };
   competitions?: Array<{ competitors?: EspnCompetitor[] }>;
 }
 
@@ -61,6 +62,18 @@ export interface ExploreGame {
   awayAbbr: string;
   homeName: string;
   awayName: string;
+  // Live score fields — only present for a team sport (NFL/MLB) with a
+  // real ESPN scoreboard entry, and only meaningful once state is "in".
+  // Feeds the room screen's ScoreBug (see DECISIONS.md, "Room screen:
+  // tabbed Live/Chat/Picks"). Left undefined for WWE (not a score sport)
+  // and for anything ESPN doesn't return a field for — every consumer
+  // treats these as optional and falls back to not showing a score.
+  homeScore?: number;
+  awayScore?: number;
+  period?: number;
+  clock?: string;
+  homeColor?: string;
+  awayColor?: string;
 }
 
 export interface GamesResponse {
@@ -82,6 +95,12 @@ async function fetchEspnGames(league: EspnLeague): Promise<ExploreGame[]> {
       const away = comp?.competitors?.find((c) => c.homeAway === "away");
       const homeName = home?.team?.shortDisplayName ?? home?.team?.displayName ?? "Home";
       const awayName = away?.team?.shortDisplayName ?? away?.team?.displayName ?? "Away";
+      // Score/period/clock/color are all best-effort — ESPN's shape here
+      // isn't reachable to test against from this sandbox (see DECISIONS.md),
+      // so every field is read defensively and just comes back undefined
+      // (never throws) if it's missing or shaped differently than expected.
+      const homeScore = home?.score != null && home.score !== "" ? Number(home.score) : undefined;
+      const awayScore = away?.score != null && away.score !== "" ? Number(away.score) : undefined;
       return {
         id: e.id,
         league,
@@ -95,6 +114,12 @@ async function fetchEspnGames(league: EspnLeague): Promise<ExploreGame[]> {
         awayAbbr: away?.team?.abbreviation ?? "AWAY",
         homeName,
         awayName,
+        homeScore: Number.isFinite(homeScore) ? homeScore : undefined,
+        awayScore: Number.isFinite(awayScore) ? awayScore : undefined,
+        period: e.status?.period,
+        clock: e.status?.displayClock,
+        homeColor: home?.team?.color ? `#${home.team.color.replace(/^#/, "")}` : undefined,
+        awayColor: away?.team?.color ? `#${away.team.color.replace(/^#/, "")}` : undefined,
       };
     });
   } catch (err) {
