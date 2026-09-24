@@ -21,6 +21,16 @@ import type { ExploreGame, GamesResponse } from "@/app/api/games/route";
  * schedule window (an ad hoc watch party, or a game further out than
  * what's currently pulled) falls back to its own card under "Other
  * public rooms" so nothing gets lost.
+ *
+ * A game (with its nested rooms) is "live" — and appears ONLY under
+ * Live Now, never both tabs — when ESPN says the broadcast is in
+ * progress OR any room nested under it has gone live (see DECISIONS.md,
+ * "Fix: a game showed in both Live Now and Upcoming"). The second half
+ * of that check matters for WWE, which has no live broadcast state of
+ * its own — a WWE game card only moves to Live Now once someone's room
+ * for it actually goes live. Both tabs render through the same
+ * `GameCard`, so "Start your own" shows up next to existing rooms in
+ * either tab, not just Upcoming.
  */
 
 const LEAGUE_OPTIONS: { value: string; label: string }[] = [
@@ -103,10 +113,15 @@ function RoomRow({ room, compact }: { room: PublicRoom; compact?: boolean }) {
   );
 }
 
+function isGameLive(game: ExploreGame, rooms: PublicRoom[]): boolean {
+  return game.state === "in" || rooms.some((r) => r.status === "live");
+}
+
 function GameCard({ game, rooms }: { game: ExploreGame; rooms: PublicRoom[] }) {
   const router = useRouter();
   const now = useNow();
-  const countdown = game.state === "in" ? "Live" : formatCountdown(game.dateISO, now);
+  const live = isGameLive(game, rooms);
+  const countdown = live ? "Live" : formatCountdown(game.dateISO, now);
 
   return (
     <div className="rounded-tile border border-line bg-s1 p-4">
@@ -114,7 +129,7 @@ function GameCard({ game, rooms }: { game: ExploreGame; rooms: PublicRoom[] }) {
         <LeagueBadge league={game.league} />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <Pill tone={game.state === "in" ? "live" : "neutral"}>{game.state === "in" ? "Live" : game.leagueLabel}</Pill>
+            <Pill tone={live ? "live" : "neutral"}>{live ? "Live" : game.leagueLabel}</Pill>
           </div>
           <p className="mt-1.5 font-ui text-[15px] font-semibold text-tx">{game.title}</p>
           <p className="font-ui text-[12px] text-mu">
@@ -210,12 +225,30 @@ export default function ExplorePage() {
     return map;
   }, [allRooms]);
 
-  const liveRooms = allRooms.filter((r) => r.status === "live" && matchesLeague(r.event.league));
+  // Every fetched game, league-filtered, split once into live vs.
+  // upcoming so a game (and its nested rooms) shows under exactly one
+  // tab — never both (see the file doc comment above).
+  const leagueGames = allGames.filter((g) => matchesLeague(g.league));
+  const liveGames = leagueGames.filter((g) => isGameLive(g, roomsByEventId.get(g.id) ?? []));
+  const upcomingGames = leagueGames
+    .filter((g) => !isGameLive(g, roomsByEventId.get(g.id) ?? []))
+    .filter((g) => isWithinDateScope(g.dateISO, dateScope));
 
-  const upcomingGames = allGames.filter((g) => matchesLeague(g.league) && isWithinDateScope(g.dateISO, dateScope));
-  const shownGameIds = new Set(upcomingGames.map((g) => g.id));
+  // A public room whose event didn't come back from /api/games at all
+  // (an ad hoc watch party, or a game further out than the fetched
+  // window) has no game card to nest under — it falls back to its own
+  // row, split the same way: live ones under Live Now, the rest under
+  // Upcoming's "Other public rooms".
+  const knownGameIds = new Set(leagueGames.map((g) => g.id));
+  const liveOrphanRooms = allRooms.filter(
+    (r) => r.status === "live" && !knownGameIds.has(r.event.providerEventId) && matchesLeague(r.event.league)
+  );
   const otherRooms = allRooms.filter(
-    (r) => r.status !== "live" && !shownGameIds.has(r.event.providerEventId) && matchesLeague(r.event.league) && isWithinDateScope(r.event.startTimeISO, dateScope)
+    (r) =>
+      r.status !== "live" &&
+      !knownGameIds.has(r.event.providerEventId) &&
+      matchesLeague(r.event.league) &&
+      isWithinDateScope(r.event.startTimeISO, dateScope)
   );
 
   return (
@@ -239,13 +272,20 @@ export default function ExplorePage() {
 
       {tab === "live" ? (
         <section className="mt-6 flex flex-col gap-3">
-          {roomsLoading ? (
+          {gamesLoading || roomsLoading ? (
             <>
               <div className="h-[92px] animate-pulse rounded-tile border border-line bg-s1" />
               <div className="h-[92px] animate-pulse rounded-tile border border-line bg-s1" />
             </>
-          ) : liveRooms.length > 0 ? (
-            liveRooms.map((r) => <RoomRow key={r.code} room={r} />)
+          ) : liveGames.length > 0 || liveOrphanRooms.length > 0 ? (
+            <>
+              {liveGames.map((g) => (
+                <GameCard key={`${g.league}-${g.id}`} game={g} rooms={roomsByEventId.get(g.id) ?? []} />
+              ))}
+              {liveOrphanRooms.map((r) => (
+                <RoomRow key={r.code} room={r} />
+              ))}
+            </>
           ) : (
             <div className="flex flex-col items-center gap-1 rounded-tile border border-line bg-s1 px-6 py-10 text-center">
               <p className="font-ui text-[13px] text-mu">Nothing live right now.</p>
@@ -292,3 +332,4 @@ export default function ExplorePage() {
     </div>
   );
 }
+
