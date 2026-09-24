@@ -3,11 +3,10 @@
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
-import { Button, LeagueBadge, Pill, Segmented, TabBar } from "@huddle/ui";
+import { Segmented, TabBar } from "@huddle/ui";
 import { TAB_PATHS } from "@/lib/tabs";
-import { createRoomUrlForGame } from "@/lib/createRoomUrl";
-import { formatCountdown, useNow } from "@/lib/useCountdown";
-import type { ExploreGame, GamesResponse } from "@/app/api/games/route";
+import { GameCard, RoomRow, isGameLive, type PublicRoom } from "@/components/GameCard";
+import type { GamesResponse } from "@/app/api/games/route";
 
 /**
  * Explore — browse by league, live or upcoming (see DECISIONS.md,
@@ -31,6 +30,12 @@ import type { ExploreGame, GamesResponse } from "@/app/api/games/route";
  * for it actually goes live. Both tabs render through the same
  * `GameCard`, so "Start your own" shows up next to existing rooms in
  * either tab, not just Upcoming.
+ *
+ * `GameCard`/`RoomRow`/`isGameLive` moved out to `@/components/GameCard`
+ * (see DECISIONS.md, "Home: join the same way Explore does") so Home's
+ * "Tonight" card can render a game exactly the same way this screen does,
+ * instead of the two screens quietly growing different rules for the same
+ * thing.
  */
 
 const LEAGUE_OPTIONS: { value: string; label: string }[] = [
@@ -45,23 +50,6 @@ const DATE_OPTIONS: { value: "today" | "week" | "all"; label: string }[] = [
   { value: "week", label: "This Week" },
   { value: "all", label: "All" },
 ];
-
-interface PublicRoomEvent {
-  providerEventId: string;
-  homeName: string;
-  awayName: string;
-  startTimeISO: string;
-  league?: string | null;
-  title?: string | null;
-}
-
-interface PublicRoom {
-  code: string;
-  name: string;
-  status: string;
-  watching: number;
-  event: PublicRoomEvent;
-}
 
 async function fetchGames(): Promise<GamesResponse> {
   const res = await fetch("/api/games?league=all");
@@ -84,113 +72,6 @@ function isWithinDateScope(dateISO: string, scope: "today" | "week" | "all"): bo
   const graceMs = 3 * 60 * 60 * 1000; // keep something that started a few hours ago
   const weekMs = 7 * 24 * 60 * 60 * 1000;
   return date.getTime() >= now.getTime() - graceMs && date.getTime() <= now.getTime() + weekMs;
-}
-
-function roomLabel(room: PublicRoom): string {
-  return room.event.title ?? `${room.event.awayName} @ ${room.event.homeName}`;
-}
-
-function RoomRow({ room, compact }: { room: PublicRoom; compact?: boolean }) {
-  const router = useRouter();
-  return (
-    <div className={compact ? "flex items-center justify-between gap-3 rounded-control bg-s2 px-3 py-2.5" : "rounded-tile border border-line bg-s1 p-4"}>
-      <div className={compact ? "min-w-0" : undefined}>
-        <div className="flex items-center gap-2">
-          <Pill tone={room.status === "live" ? "live" : "neutral"}>{room.status === "live" ? "Live" : "Waiting"}</Pill>
-          {room.watching > 0 && <span className="font-ui text-[11px] text-mu2">{room.watching} watching</span>}
-        </div>
-        <p className="mt-1.5 truncate font-ui text-[14px] font-semibold text-tx">{room.name}</p>
-        {!compact && <p className="font-ui text-[12px] text-mu">{roomLabel(room)}</p>}
-      </div>
-      <Button
-        variant="primary"
-        className={compact ? "h-9 shrink-0 px-4" : "mt-3 h-11 w-full"}
-        onClick={() => router.push(`/join?code=${room.code}`)}
-      >
-        Join
-      </Button>
-    </div>
-  );
-}
-
-function isGameLive(game: ExploreGame, rooms: PublicRoom[]): boolean {
-  return game.state === "in" || rooms.some((r) => r.status === "live");
-}
-
-function GameCard({ game, rooms }: { game: ExploreGame; rooms: PublicRoom[] }) {
-  const router = useRouter();
-  const now = useNow();
-  const live = isGameLive(game, rooms);
-  const countdown = live ? "Live" : formatCountdown(game.dateISO, now);
-
-  return (
-    <div className="rounded-tile border border-line bg-s1 p-4">
-      <div className="flex items-start gap-3">
-        <LeagueBadge league={game.league} />
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <Pill tone={live ? "live" : "neutral"}>{live ? "Live" : game.leagueLabel}</Pill>
-          </div>
-          <p className="mt-1.5 font-ui text-[15px] font-semibold text-tx">{game.title}</p>
-          <p className="font-ui text-[12px] text-mu">
-            {game.subtitle ? `${game.subtitle} · ` : ""}
-            {game.detail || countdown}
-          </p>
-        </div>
-      </div>
-
-      {rooms.length > 0 ? (
-        <div className="mt-3 flex flex-col gap-2">
-          {rooms.map((r) => (
-            <RoomRow key={r.code} room={r} compact />
-          ))}
-          <Button
-            variant="secondary"
-            fullWidth
-            className="mt-1 h-10"
-            onClick={() =>
-              router.push(
-                createRoomUrlForGame({
-                  id: game.id,
-                  league: game.league,
-                  title: game.title,
-                  homeAbbr: game.homeAbbr,
-                  awayAbbr: game.awayAbbr,
-                  homeName: game.homeName,
-                  awayName: game.awayName,
-                  dateISO: game.dateISO,
-                })
-              )
-            }
-          >
-            Start your own
-          </Button>
-        </div>
-      ) : (
-        <Button
-          variant="primary"
-          fullWidth
-          className="mt-3 h-11"
-          onClick={() =>
-            router.push(
-              createRoomUrlForGame({
-                id: game.id,
-                league: game.league,
-                title: game.title,
-                homeAbbr: game.homeAbbr,
-                awayAbbr: game.awayAbbr,
-                homeName: game.homeName,
-                awayName: game.awayName,
-                dateISO: game.dateISO,
-              })
-            )
-          }
-        >
-          Start watch party
-        </Button>
-      )}
-    </div>
-  );
 }
 
 export default function ExplorePage() {
@@ -332,4 +213,3 @@ export default function ExplorePage() {
     </div>
   );
 }
-

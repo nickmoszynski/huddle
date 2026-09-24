@@ -29,6 +29,17 @@ import { useSession } from "@/lib/session";
  * Explore's multi-league game list (see DECISIONS.md, "Explore: browse
  * by league") — they tag which schedule source the event came from and
  * override the default "away @ home" label for something like WWE.
+ *
+ * Room name (see DECISIONS.md, "Home: join the same way Explore does" —
+ * the room-naming half of that entry): used to be impossible to set at
+ * all, the room was always just named after the matchup ("Falcons @
+ * Packers"). That's fine for a quick room for your own group, but Mo's
+ * original concept had public rooms with their own identity — "Patriots
+ * Fans Only," "Northampton Watch Party" — something worth finding in
+ * Explore, not indistinguishable from the game card it's nested under.
+ * Pre-filled with the game matchup (or "Watch Party" for an ad hoc room)
+ * so leaving it alone still works exactly like before; only someone who
+ * actually wants a distinct public identity needs to change it.
  */
 export default function CreateRoomPage() {
   return (
@@ -58,6 +69,10 @@ function CreateRoomForm() {
 
   const { isSignedIn, user } = useSession();
   const [name, setName] = useState(() => getStoredDisplayName());
+  // Pre-filled with the game matchup (or blank for an ad hoc room, where
+  // /api/rooms already falls back to "Watch Party") so leaving it alone
+  // works exactly like before create ever had this field.
+  const [roomName, setRoomName] = useState(() => gameLabel ?? "");
   const [isPublic, setIsPublic] = useState(false);
   const [status, setStatus] = useState<"idle" | "working" | "error">("idle");
   const [error, setError] = useState<string | null>(null);
@@ -76,6 +91,7 @@ function CreateRoomForm() {
         body: JSON.stringify({
           authUserId,
           displayName,
+          roomName: roomName.trim() || undefined,
           privacy: isPublic ? "public" : "private",
           game: hasGame
             ? {
@@ -133,6 +149,23 @@ function CreateRoomForm() {
           />
         </>
       )}
+
+      <label className="mt-6 font-ui text-[13px] font-bold uppercase tracking-[0.06em] text-mu" htmlFor="room-name">
+        Room name
+      </label>
+      <input
+        id="room-name"
+        value={roomName}
+        onChange={(e) => setRoomName(e.target.value)}
+        placeholder={isPublic ? "Patriots Fans Only" : gameLabel || "Watch Party"}
+        maxLength={60}
+        className="mt-2 h-[52px] rounded-control border border-line2 bg-s2 px-4 font-ui text-[15px] text-tx outline-none placeholder:text-mu2 focus:border-ac"
+      />
+      <p className="mt-1.5 font-ui text-[12px] text-mu2">
+        {isPublic
+          ? "This is what shows up in Explore — make it something people would recognize and want to join."
+          : "Just for you and whoever you invite — defaults to the matchup if you leave it as-is."}
+      </p>
 
       <div className="mt-6 flex items-center justify-between gap-3 rounded-tile border border-line bg-s1 p-4">
         <div>

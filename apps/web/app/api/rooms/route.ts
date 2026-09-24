@@ -33,6 +33,11 @@ const gameSchema = z.object({
 const bodySchema = z.object({
   authUserId: z.string().uuid(),
   displayName: z.string().trim().min(1).max(40),
+  // The host's own name for the room ("Patriots Fans Only") — see
+  // DECISIONS.md, "Home: join the same way Explore does". Optional:
+  // falls back to the same game-matchup-or-"Watch Party" default this
+  // always used before the room-name field existed.
+  roomName: z.string().trim().min(1).max(60).optional(),
   privacy: z.enum(["private", "fof", "public"]).optional(),
   game: gameSchema.optional(),
 });
@@ -43,7 +48,7 @@ export async function POST(req: NextRequest) {
   if (!parsed.success) {
     return NextResponse.json({ error: "Invalid request." }, { status: 400 });
   }
-  const { authUserId, displayName, game, privacy } = parsed.data;
+  const { authUserId, displayName, game, privacy, roomName: customRoomName } = parsed.data;
 
   try {
     const db = getDb();
@@ -100,7 +105,7 @@ export async function POST(req: NextRequest) {
     // nothing ever advanced out of, and Explore's "Live Now" tab (which
     // filters on this column) could never show anything.
     const code = await generateUniqueRoomCode();
-    const roomName = game ? game.title ?? `${game.awayName} @ ${game.homeName}` : "Watch Party";
+    const roomName = customRoomName || (game ? game.title ?? `${game.awayName} @ ${game.homeName}` : "Watch Party");
     const [room] = await db
       .insert(rooms)
       .values({
