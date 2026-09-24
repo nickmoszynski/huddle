@@ -39,8 +39,21 @@ export interface PublicRoom {
   event: PublicRoomEvent;
 }
 
+/** A room actually has people in it right now — not the same thing as
+ * `room.status === "live"` (see DECISIONS.md, "Fix: a game showed LIVE
+ * hours before kickoff"). `rooms.status` gets set to "live" the moment a
+ * room is created and, since nothing yet marks a room "ended" when
+ * everyone leaves, effectively stays "live" forever — an empty room from
+ * an hours-old test looks identical to one that's actually happening
+ * right now if you go by status alone. `watching` (a live count of
+ * current participants) is the only field that's actually true in the
+ * present tense. */
+export function roomIsActive(room: PublicRoom): boolean {
+  return room.watching > 0;
+}
+
 export function isGameLive(game: ExploreGame, rooms: PublicRoom[]): boolean {
-  return game.state === "in" || rooms.some((r) => r.status === "live");
+  return game.state === "in" || rooms.some(roomIsActive);
 }
 
 export function roomLabel(room: PublicRoom): string {
@@ -49,6 +62,7 @@ export function roomLabel(room: PublicRoom): string {
 
 export function RoomRow({ room, compact }: { room: PublicRoom; compact?: boolean }) {
   const router = useRouter();
+  const active = roomIsActive(room);
   return (
     <div
       className={
@@ -59,7 +73,7 @@ export function RoomRow({ room, compact }: { room: PublicRoom; compact?: boolean
     >
       <div className={compact ? "min-w-0" : undefined}>
         <div className="flex items-center gap-2">
-          <Pill tone={room.status === "live" ? "live" : "neutral"}>{room.status === "live" ? "Live" : "Waiting"}</Pill>
+          <Pill tone={active ? "live" : "neutral"}>{active ? "Live" : "Waiting"}</Pill>
           {room.watching > 0 && <span className="font-ui text-[11px] text-mu2">{room.watching} watching</span>}
         </div>
         <p className="mt-1.5 truncate font-ui text-[14px] font-semibold text-tx">{room.name}</p>

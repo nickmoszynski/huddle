@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { Segmented, TabBar } from "@huddle/ui";
 import { TAB_PATHS } from "@/lib/tabs";
-import { GameCard, RoomRow, isGameLive, type PublicRoom } from "@/components/GameCard";
+import { GameCard, RoomRow, isGameLive, roomIsActive, type PublicRoom } from "@/components/GameCard";
 import type { GamesResponse } from "@/app/api/games/route";
 
 /**
@@ -23,13 +23,19 @@ import type { GamesResponse } from "@/app/api/games/route";
  *
  * A game (with its nested rooms) is "live" — and appears ONLY under
  * Live Now, never both tabs — when ESPN says the broadcast is in
- * progress OR any room nested under it has gone live (see DECISIONS.md,
- * "Fix: a game showed in both Live Now and Upcoming"). The second half
- * of that check matters for WWE, which has no live broadcast state of
- * its own — a WWE game card only moves to Live Now once someone's room
- * for it actually goes live. Both tabs render through the same
- * `GameCard`, so "Start your own" shows up next to existing rooms in
- * either tab, not just Upcoming.
+ * progress OR any room nested under it actually has someone in it right
+ * now (see DECISIONS.md, "Fix: a game showed in both Live Now and
+ * Upcoming", and its follow-up "Fix: a game showed LIVE hours before
+ * kickoff"). That second check is `roomIsActive` (`watching > 0`), not
+ * `room.status === "live"` — status gets set to "live" the instant a
+ * room is created and never changes, so an empty room from an old test
+ * would otherwise flag the whole game LIVE forever. The "someone's
+ * actually in a room for it" half of the live check matters for WWE
+ * especially, which has no live broadcast state of its own — a WWE game
+ * card only moves to Live Now once someone's room for it actually has
+ * people in it. Both tabs render through the same `GameCard`, so "Start
+ * your own" shows up next to existing rooms in either tab, not just
+ * Upcoming.
  *
  * `GameCard`/`RoomRow`/`isGameLive` moved out to `@/components/GameCard`
  * (see DECISIONS.md, "Home: join the same way Explore does") so Home's
@@ -122,11 +128,11 @@ export default function ExplorePage() {
   // Upcoming's "Other public rooms".
   const knownGameIds = new Set(leagueGames.map((g) => g.id));
   const liveOrphanRooms = allRooms.filter(
-    (r) => r.status === "live" && !knownGameIds.has(r.event.providerEventId) && matchesLeague(r.event.league)
+    (r) => roomIsActive(r) && !knownGameIds.has(r.event.providerEventId) && matchesLeague(r.event.league)
   );
   const otherRooms = allRooms.filter(
     (r) =>
-      r.status !== "live" &&
+      !roomIsActive(r) &&
       !knownGameIds.has(r.event.providerEventId) &&
       matchesLeague(r.event.league) &&
       isWithinDateScope(r.event.startTimeISO, dateScope)
