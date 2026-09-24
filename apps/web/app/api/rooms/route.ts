@@ -28,6 +28,7 @@ const gameSchema = z.object({
 const bodySchema = z.object({
   authUserId: z.string().uuid(),
   displayName: z.string().trim().min(1).max(40),
+  privacy: z.enum(["private", "fof", "public"]).optional(),
   game: gameSchema.optional(),
 });
 
@@ -37,7 +38,7 @@ export async function POST(req: NextRequest) {
   if (!parsed.success) {
     return NextResponse.json({ error: "Invalid request." }, { status: 400 });
   }
-  const { authUserId, displayName, game } = parsed.data;
+  const { authUserId, displayName, game, privacy } = parsed.data;
 
   try {
     const db = getDb();
@@ -94,7 +95,7 @@ export async function POST(req: NextRequest) {
         name: roomName,
         eventId: eventRow.id,
         hostId: userRow.id,
-        privacy: "private",
+        privacy: privacy ?? "private",
         status: "waiting",
       })
       .returning();
