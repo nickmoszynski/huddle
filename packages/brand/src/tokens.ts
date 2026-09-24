@@ -27,7 +27,7 @@ export const colors = {
 } as const;
 
 export const fonts = {
-  display: "'Big Shoulders Display', sans-serif", // 800-900, uppercase, lh .88
+  display: "'Barlow Condensed', sans-serif", // 800-900, uppercase, lh .88 — see apps/web/app/fonts.ts
   ui: "'Instrument Sans', sans-serif", // 400-700
 } as const;
 
