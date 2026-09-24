@@ -92,7 +92,13 @@ export async function POST(req: NextRequest) {
       userRow = inserted;
     }
 
-    // 3. Create the room itself.
+    // 3. Create the room itself. Status starts at "live", not the enum's
+    // default "waiting" — there's no "schedule a room for later" flow
+    // yet (see DECISIONS.md, "Fix: rooms never actually went live"): the
+    // host is seated as a participant in the very next step and lands
+    // straight in the live room screen, so "waiting" was dead state that
+    // nothing ever advanced out of, and Explore's "Live Now" tab (which
+    // filters on this column) could never show anything.
     const code = await generateUniqueRoomCode();
     const roomName = game ? game.title ?? `${game.awayName} @ ${game.homeName}` : "Watch Party";
     const [room] = await db
@@ -103,7 +109,7 @@ export async function POST(req: NextRequest) {
         eventId: eventRow.id,
         hostId: userRow.id,
         privacy: privacy ?? "private",
-        status: "waiting",
+        status: "live",
       })
       .returning();
     if (!room) throw new Error("Insert into rooms returned no row.");
