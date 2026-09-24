@@ -2,7 +2,7 @@
 
 import { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Avatar, Button } from "@huddle/ui";
+import { Avatar, Button, Switch } from "@huddle/ui";
 import { ensureAnonymousUserId } from "@/lib/supabaseClient";
 import { getStoredDisplayName, storeDisplayName } from "@/lib/guestName";
 import { useSession } from "@/lib/session";
@@ -20,6 +20,10 @@ import { useSession } from "@/lib/session";
  * confirms who you're starting as and skips straight to the button. Only
  * an unclaimed visitor (or someone who's never signed in at all) sees the
  * name field, same as before.
+ *
+ * "Make this room public" (see DECISIONS.md, "Public rooms show up in
+ * Explore") sets `rooms.privacy = 'public'` instead of the default
+ * `'private'` — that's the only thing Explore's room list filters on.
  */
 export default function CreateRoomPage() {
   return (
@@ -44,6 +48,7 @@ function CreateRoomForm() {
 
   const { isSignedIn, user } = useSession();
   const [name, setName] = useState(() => getStoredDisplayName());
+  const [isPublic, setIsPublic] = useState(false);
   const [status, setStatus] = useState<"idle" | "working" | "error">("idle");
   const [error, setError] = useState<string | null>(null);
 
@@ -61,6 +66,7 @@ function CreateRoomForm() {
         body: JSON.stringify({
           authUserId,
           displayName,
+          privacy: isPublic ? "public" : "private",
           game: hasGame
             ? { providerEventId, homeAbbr, awayAbbr, homeName, awayName, startTimeISO: startTime }
             : undefined,
@@ -108,6 +114,14 @@ function CreateRoomForm() {
           />
         </>
       )}
+
+      <div className="mt-6 flex items-center justify-between gap-3 rounded-tile border border-line bg-s1 p-4">
+        <div>
+          <p className="font-ui text-[14px] font-semibold text-tx">Make this room public</p>
+          <p className="mt-0.5 font-ui text-[12px] text-mu">Anyone can find and join it from Explore</p>
+        </div>
+        <Switch checked={isPublic} onChange={setIsPublic} label="Make this room public" />
+      </div>
 
       <Button variant="primary" fullWidth className="mt-8" onClick={handleCreate} disabled={status === "working"}>
         {status === "working" ? "Creating…" : "Create room"}
