@@ -13,6 +13,12 @@ import { Avatar } from "./Avatar";
 export interface VideoTileProps {
   name: string;
   avatarSrc?: string;
+  /**
+   * A live video element (e.g. LiveKit's <VideoTrack />) to render instead
+   * of the avatar/avatarSrc when `camOn` is true. Kept generic — this
+   * primitive doesn't know or care that it's LiveKit specifically.
+   */
+  videoElement?: React.ReactNode;
   micOn: boolean;
   camOn: boolean;
   conn: "good" | "poor" | "reconnecting";
@@ -26,6 +32,7 @@ export interface VideoTileProps {
 export function VideoTile({
   name,
   avatarSrc,
+  videoElement,
   micOn,
   camOn,
   conn,
@@ -46,7 +53,11 @@ export function VideoTile({
       )}
     >
       {camOn && !joining ? (
-        avatarSrc ? (
+        videoElement ? (
+          <div className="h-full w-full [&>video]:h-full [&>video]:w-full [&>video]:object-cover">
+            {videoElement}
+          </div>
+        ) : avatarSrc ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img src={avatarSrc} alt={name} className="h-full w-full object-cover" />
         ) : (

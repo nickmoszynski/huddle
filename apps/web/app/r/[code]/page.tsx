@@ -3,6 +3,9 @@
 import { Suspense, useEffect, useState } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Track } from "livekit-client";
+import { LiveKitRoom, RoomAudioRenderer, VideoTrack, useLocalParticipant, useTracks } from "@livekit/components-react";
+import { Mic, MicOff, Video, VideoOff } from "lucide-react";
 import { Button, Pill, VideoTile } from "@huddle/ui";
 import { getSupabaseBrowserClient } from "@/lib/supabaseClient";
 
@@ -15,9 +18,18 @@ import { getSupabaseBrowserClient } from "@/lib/supabaseClient";
  * `refetchInterval` below is kept as a slow safety-net poll (not the
  * primary update path anymore) in case a Realtime subscription silently
  * drops — belt and suspenders, not a second copy of the same mechanism.
- * Video, audio, and chat still aren't wired up (LiveKit isn't connected
- * yet) — this deliberately says so rather than faking a live multi-person
- * call.
+ *
+ * Video and audio are real now too (see DECISIONS.md, "LiveKit for real
+ * video/audio"): once a participant has joined (myParticipantId is set),
+ * this fetches a LiveKit token and wraps the participant grid in a
+ * <LiveKitRoom>. Nothing auto-publishes on connect (audio/video both
+ * `false`) — camera/mic only turn on when the person taps the toggle
+ * buttons, matching the `mic_on`/`cam_on` defaulting to false at join.
+ * Toggling calls LiveKit directly (so this device reacts instantly) AND
+ * POSTs to /api/rooms/[code]/state (so everyone else's tile updates via
+ * the same Realtime path joins/leaves already use) — two separate systems,
+ * kept in sync by this one call site rather than by LiveKit and Postgres
+ * somehow agreeing on their own. Chat still isn't wired up.
  */
 
 interface RoomParticipant {
@@ -40,10 +52,26 @@ interface RoomResponse {
   participants: RoomParticipant[];
 }
 
+interface LiveKitTokenResponse {
+  token: string;
+  serverUrl: string;
+}
+
 async function fetchRoom(code: string): Promise<RoomResponse> {
   const res = await fetch(`/api/rooms/${code}`);
   const data = await res.json();
   if (!res.ok) throw new Error(data?.error ?? "Could not load the room.");
+  return data;
+}
+
+async function fetchLiveKitToken(code: string, participantId: string): Promise<LiveKitTokenResponse> {
+  const res = await fetch("/api/livekit/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ roomCode: code, participantId }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data?.error ?? "Could not start video/audio.");
   return data;
 }
 
@@ -76,9 +104,10 @@ function RoomView() {
   const roomId = data?.room.id;
 
   // Live updates: subscribe to changes on this room's participants and
-  // refetch immediately when someone joins/leaves, instead of waiting on
-  // the slow poll above. Requires the "Public read (realtime)" policy from
-  // migration 0002 — without it Realtime silently delivers nothing.
+  // refetch immediately when someone joins/leaves/toggles mic or camera,
+  // instead of waiting on the slow poll above. Requires the "Public read
+  // (realtime)" policy from migration 0002 — without it Realtime silently
+  // delivers nothing.
   useEffect(() => {
     if (!roomId) return;
 
@@ -104,6 +133,17 @@ function RoomView() {
       supabase.removeChannel(channel);
     };
   }, [roomId, code, queryClient]);
+
+  // LiveKit token — only once we're actually a participant. A token is
+  // good for its full 4h ttl (see the token route), so there's no reason
+  // to ever refetch it on its own.
+  const { data: liveKit } = useQuery({
+    queryKey: ["livekit-token", code, myParticipantId],
+    queryFn: () => fetchLiveKitToken(code, myParticipantId as string),
+    enabled: !!myParticipantId,
+    retry: false,
+    staleTime: Infinity,
+  });
 
   async function handleCopy() {
     try {
@@ -185,17 +225,32 @@ function RoomView() {
         {copied ? "Invite link copied" : "Copy invite link"}
       </Button>
 
-      <div className="mt-8 grid grid-cols-2 gap-3">
-        {participants.map((p) => (
-          <VideoTile key={p.id} name={p.displayName} micOn={p.micOn} camOn={p.camOn} conn={p.conn} />
-        ))}
-      </div>
+      {myParticipantId && liveKit ? (
+        <LiveKitRoom
+          serverUrl={liveKit.serverUrl}
+          token={liveKit.token}
+          connect
+          audio={false}
+          video={false}
+          onError={(err) => console.error("[LiveKit] room connection error", err)}
+        >
+          <RoomAudioRenderer />
+          <LiveParticipantGrid participants={participants} myParticipantId={myParticipantId} code={code} />
+        </LiveKitRoom>
+      ) : (
+        <div className="mt-8 grid grid-cols-2 gap-3">
+          {participants.map((p) => (
+            <VideoTile key={p.id} name={p.displayName} micOn={p.micOn} camOn={p.camOn} conn={p.conn} />
+          ))}
+        </div>
+      )}
 
       <div className="mt-8 rounded-tile border border-line bg-s1 p-4">
         <Pill tone="neutral">Preview</Pill>
         <p className="mt-2 font-ui text-[13px] text-mu">
-          This room is real — anyone with the code {code} can join it from any device, and the list above updates
-          live. Video, audio, and chat aren't connected yet (LiveKit isn't wired up), so mic/camera stay off for now.
+          {myParticipantId
+            ? `This room is real — anyone with the code ${code} can join it from any device. Turn on your mic and camera above to be seen and heard. Chat isn't connected yet.`
+            : `This room is real — anyone with the code ${code} can join it from any device, and the list above updates live. Join to turn on your mic and camera.`}
         </p>
       </div>
 
@@ -203,5 +258,106 @@ function RoomView() {
         Leave room
       </Button>
     </div>
+  );
+}
+
+/**
+ * Lives inside <LiveKitRoom> — useTracks/useLocalParticipant both need the
+ * room context that provides. Matches each DB participant to their LiveKit
+ * camera track by identity (the token route mints identity = participant
+ * row id, so this is a plain equality check, not a name-matching heuristic).
+ */
+function LiveParticipantGrid({
+  participants,
+  myParticipantId,
+  code,
+}: {
+  participants: RoomParticipant[];
+  myParticipantId: string;
+  code: string;
+}) {
+  const cameraTracks = useTracks([Track.Source.Camera]);
+  const { localParticipant, isMicrophoneEnabled, isCameraEnabled } = useLocalParticipant();
+  const [toggling, setToggling] = useState(false);
+
+  async function reportState(patch: { micOn?: boolean; camOn?: boolean }) {
+    try {
+      await fetch(`/api/rooms/${code}/state`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ participantId: myParticipantId, ...patch }),
+      });
+    } catch {
+      // Best-effort — this device already reflects the change via LiveKit
+      // directly; only everyone else's view of it would be missed.
+    }
+  }
+
+  async function toggleMic() {
+    setToggling(true);
+    try {
+      const next = !isMicrophoneEnabled;
+      await localParticipant.setMicrophoneEnabled(next);
+      await reportState({ micOn: next });
+    } catch (err) {
+      console.error("[LiveKit] could not toggle microphone", err);
+    } finally {
+      setToggling(false);
+    }
+  }
+
+  async function toggleCam() {
+    setToggling(true);
+    try {
+      const next = !isCameraEnabled;
+      await localParticipant.setCameraEnabled(next);
+      await reportState({ camOn: next });
+    } catch (err) {
+      console.error("[LiveKit] could not toggle camera", err);
+    } finally {
+      setToggling(false);
+    }
+  }
+
+  return (
+    <>
+      <div className="mt-8 grid grid-cols-2 gap-3">
+        {participants.map((p) => {
+          const isMe = p.id === myParticipantId;
+          const trackRef = cameraTracks.find((t) => t.participant.identity === p.id);
+          return (
+            <VideoTile
+              key={p.id}
+              name={isMe ? `${p.displayName} (you)` : p.displayName}
+              micOn={isMe ? isMicrophoneEnabled : p.micOn}
+              camOn={isMe ? isCameraEnabled : p.camOn}
+              conn={p.conn}
+              videoElement={trackRef ? <VideoTrack trackRef={trackRef} /> : undefined}
+            />
+          );
+        })}
+      </div>
+
+      <div className="mt-4 flex gap-3">
+        <Button
+          variant="secondary"
+          className="flex-1"
+          onClick={toggleMic}
+          disabled={toggling}
+          icon={isMicrophoneEnabled ? <Mic size={18} /> : <MicOff size={18} />}
+        >
+          {isMicrophoneEnabled ? "Mute" : "Unmute"}
+        </Button>
+        <Button
+          variant="secondary"
+          className="flex-1"
+          onClick={toggleCam}
+          disabled={toggling}
+          icon={isCameraEnabled ? <Video size={18} /> : <VideoOff size={18} />}
+        >
+          {isCameraEnabled ? "Stop video" : "Start video"}
+        </Button>
+      </div>
+    </>
   );
 }
