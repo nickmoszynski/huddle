@@ -67,19 +67,33 @@ import type { ExploreGame, GamesResponse } from "@/app/api/games/route";
  * refetches the whole picks list on any change to any of the three
  * tables. Fine at this scale; revisit if a room ever has dozens of picks.
  *
- * Layout (see DECISIONS.md, "Room screen: tabbed Live/Chat/Picks"): this
- * used to be one long stacked scroll — video grid, then chat, then picks,
- * all always on screen at once. Rewritten into Live/Chat/Picks tabs (a
- * `Segmented`, matching the pill-tab language Explore already uses) so it
- * reads as one focused screen instead of a scavenger hunt. Only the
- * active tab's content shows — except the LiveKit connection itself,
- * which stays mounted the whole time and is only hidden/shown with CSS
- * (unmounting `<LiveKitRoom>` on a tab switch would drop the call). A
- * `ScoreBug` up top shows the live score when this room's event is a
+ * Layout (see DECISIONS.md, "Room screen: tabbed Live/Chat/Picks", and its
+ * follow-up "Fix: chat/picks shouldn't make video disappear"): this used
+ * to be one long stacked scroll — video grid, then chat, then picks, all
+ * always on screen at once. First rewrite made Live/Chat/Picks full tabs
+ * (a `Segmented`, matching Explore's pill-tab language) — but Mo caught,
+ * from actually using it, that switching to Chat or Picks made everyone's
+ * video disappear entirely, which felt like leaving the room rather than
+ * just checking a different panel of it. So video is never fully hidden
+ * now: it's the big grid on the Live tab, and shrinks to a small
+ * horizontally-scrolling strip pinned at the top of the Chat/Picks tabs
+ * instead of disappearing — same `<LiveKitRoom>` connection the whole
+ * time regardless of tab (unmounting it on a tab switch would drop the
+ * call), just a different `mode` on `LiveParticipantGrid`. The floating
+ * mic/camera controls are up on every tab for the same reason — you
+ * should be able to mute without switching back to Live first.
+ *
+ * A `ScoreBug` up top shows the live score when this room's event is a
  * real, currently-live NFL/MLB game (matched via `providerEventId`
  * against `/api/games` — the same lookup Explore uses to nest rooms under
  * games); it quietly doesn't render for WWE, an ad hoc room, or a game
  * that hasn't started, rather than showing a fake 0-0.
+ *
+ * What this still doesn't do — Mo flagged it, we agreed it's a later
+ * phase, not this pass: actually watching the broadcast together in the
+ * room (shared playback, synced to everyone) needs real streaming rights
+ * this app doesn't have. This is just everyone's own camera + chat/picks
+ * coexisting on one screen, not a shared TV.
  */
 
 interface RoomParticipant {
@@ -413,7 +427,7 @@ function RoomView() {
   const isHost = participants.find((p) => p.id === myParticipantId)?.role === "host";
 
   return (
-    <div className="flex min-h-dvh flex-col pb-10 pt-14">
+    <div className="flex min-h-dvh flex-col pb-28 pt-14">
       <div className="flex items-center gap-2 px-gutter">
         <button
           onClick={handleLeave}
@@ -481,11 +495,12 @@ function RoomView() {
             onChange={setTab}
           />
 
-          {/* Live pane — the LiveKit connection (once the token's in) stays
-           * mounted across tab switches, only hidden with CSS, so audio
-           * from a video call doesn't drop just because Chat or Picks is
-           * the visible tab right now. */}
-          <div className={cn("mx-gutter mt-4", tab !== "live" && "hidden")}>
+          {/* Video is never fully hidden by switching tabs — the big grid
+           * on Live, a compact strip pinned at top on Chat/Picks (see this
+           * file's top doc comment, "Fix: chat/picks shouldn't make video
+           * disappear"). The LiveKit connection itself stays mounted the
+           * whole time regardless of tab. */}
+          <div className="mx-gutter mt-4">
             {liveKit ? (
               <LiveKitRoom
                 serverUrl={liveKit.serverUrl}
@@ -496,12 +511,25 @@ function RoomView() {
                 onError={(err) => console.error("[LiveKit] room connection error", err)}
               >
                 <RoomAudioRenderer />
-                <LiveParticipantGrid participants={participants} myParticipantId={myParticipantId} code={code} />
+                <LiveParticipantGrid
+                  participants={participants}
+                  myParticipantId={myParticipantId}
+                  code={code}
+                  mode={tab === "live" ? "grid" : "strip"}
+                />
               </LiveKitRoom>
-            ) : (
+            ) : tab === "live" ? (
               <div className="grid grid-cols-2 gap-3">
                 {participants.map((p) => (
                   <VideoTile key={p.id} name={p.displayName} micOn={p.micOn} camOn={p.camOn} conn={p.conn} />
+                ))}
+              </div>
+            ) : (
+              <div className="flex gap-2 overflow-x-auto pb-1">
+                {participants.map((p) => (
+                  <div key={p.id} className="w-20 shrink-0">
+                    <VideoTile name={p.displayName} micOn={p.micOn} camOn={p.camOn} conn={p.conn} compact />
+                  </div>
                 ))}
               </div>
             )}
@@ -510,7 +538,7 @@ function RoomView() {
           <div className={cn("mx-gutter mt-4 flex flex-1 flex-col", tab !== "chat" && "hidden")}>
             <ChatPanel
               className="flex-1"
-              messagesClassName="min-h-[50vh] flex-1"
+              messagesClassName="min-h-[38vh] flex-1"
               messages={(rawMessages ?? []).map(
                 (m): ChatMessageItem => ({
                   id: m.id,
@@ -552,10 +580,17 @@ function LiveParticipantGrid({
   participants,
   myParticipantId,
   code,
+  mode,
 }: {
   participants: RoomParticipant[];
   myParticipantId: string;
   code: string;
+  /** "grid" — the big 2-column layout, for the Live tab. "strip" — a
+   * small horizontally-scrolling row pinned at the top of Chat/Picks, so
+   * you can still see everyone (and stay muted/unmuted correctly) without
+   * losing the whole screen to video (see this file's top doc comment,
+   * "Fix: chat/picks shouldn't make video disappear"). */
+  mode: "grid" | "strip";
 }) {
   const cameraTracks = useTracks([Track.Source.Camera]);
   const { localParticipant, isMicrophoneEnabled, isCameraEnabled } = useLocalParticipant();
@@ -600,24 +635,35 @@ function LiveParticipantGrid({
     }
   }
 
+  function tileFor(p: RoomParticipant, compact: boolean) {
+    const isMe = p.id === myParticipantId;
+    const trackRef = cameraTracks.find((t) => t.participant.identity === p.id);
+    return (
+      <VideoTile
+        key={p.id}
+        name={isMe ? `${p.displayName} (you)` : p.displayName}
+        micOn={isMe ? isMicrophoneEnabled : p.micOn}
+        camOn={isMe ? isCameraEnabled : p.camOn}
+        conn={p.conn}
+        compact={compact}
+        videoElement={trackRef ? <VideoTrack trackRef={trackRef} /> : undefined}
+      />
+    );
+  }
+
   return (
     <>
-      <div className="grid grid-cols-2 gap-3 pb-24">
-        {participants.map((p) => {
-          const isMe = p.id === myParticipantId;
-          const trackRef = cameraTracks.find((t) => t.participant.identity === p.id);
-          return (
-            <VideoTile
-              key={p.id}
-              name={isMe ? `${p.displayName} (you)` : p.displayName}
-              micOn={isMe ? isMicrophoneEnabled : p.micOn}
-              camOn={isMe ? isCameraEnabled : p.camOn}
-              conn={p.conn}
-              videoElement={trackRef ? <VideoTrack trackRef={trackRef} /> : undefined}
-            />
-          );
-        })}
-      </div>
+      {mode === "grid" ? (
+        <div className="grid grid-cols-2 gap-3 pb-24">{participants.map((p) => tileFor(p, false))}</div>
+      ) : (
+        <div className="flex gap-2 overflow-x-auto pb-1">
+          {participants.map((p) => (
+            <div key={p.id} className="w-20 shrink-0">
+              {tileFor(p, true)}
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Floating control pill, pinned to the bottom of the screen — matches
        * the board's bottom cluster of circular controls rather than the two

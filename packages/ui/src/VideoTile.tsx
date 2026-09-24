@@ -25,6 +25,10 @@ export interface VideoTileProps {
   speaking?: boolean;
   joining?: boolean;
   spotlight?: boolean;
+  /** Drops the name label and shrinks the mic badge — for a small tile in
+   * a scrolling strip, where there isn't room for a full name pill and
+   * the point is just "see that they're here," not read every name. */
+  compact?: boolean;
   onTap?: () => void;
   className?: string;
 }
@@ -39,6 +43,7 @@ export function VideoTile({
   speaking,
   joining,
   spotlight,
+  compact,
   onTap,
   className,
 }: VideoTileProps) {
@@ -91,15 +96,18 @@ export function VideoTile({
         </div>
       )}
 
-      <div className="absolute inset-x-2 bottom-2 flex items-center justify-between">
-        <span className="rounded-pill bg-black/55 px-2 py-1 font-ui text-[12px] font-semibold text-tx">{name}</span>
+      <div className={cn("absolute inset-x-2 bottom-2 flex items-center justify-between", compact && "inset-x-1 bottom-1 justify-end")}>
+        {!compact && (
+          <span className="rounded-pill bg-black/55 px-2 py-1 font-ui text-[12px] font-semibold text-tx">{name}</span>
+        )}
         <span
           className={cn(
-            "flex h-6 w-6 items-center justify-center rounded-full",
+            "flex items-center justify-center rounded-full",
+            compact ? "h-5 w-5" : "h-6 w-6",
             micOn ? "bg-black/40 text-tx" : "bg-live/90 text-white"
           )}
         >
-          {micOn ? <Mic size={12} /> : <MicOff size={12} />}
+          {micOn ? <Mic size={compact ? 10 : 12} /> : <MicOff size={compact ? 10 : 12} />}
         </span>
       </div>
     </button>
