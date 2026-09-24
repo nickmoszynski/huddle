@@ -5,8 +5,17 @@ import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Track } from "livekit-client";
 import { LiveKitRoom, RoomAudioRenderer, VideoTrack, useLocalParticipant, useTracks } from "@livekit/components-react";
-import { Mic, MicOff, Video, VideoOff } from "lucide-react";
-import { Button, ChatPanel, Pill, VideoTile, type ChatMessageItem } from "@huddle/ui";
+import { Mic, MicOff, Plus, Video, VideoOff, X } from "lucide-react";
+import {
+  Button,
+  ChatPanel,
+  Leaderboard,
+  PickCard,
+  Pill,
+  VideoTile,
+  type ChatMessageItem,
+  type ChoiceOption,
+} from "@huddle/ui";
 import { getSupabaseBrowserClient } from "@/lib/supabaseClient";
 
 /**
@@ -41,6 +50,17 @@ import { getSupabaseBrowserClient } from "@/lib/supabaseClient";
  * after a refresh) show up unstyled as "someone else's" until you send a
  * new one. A minor cosmetic gap, not a functional one — fine for a first
  * pass.
+ *
+ * Picks + a room-scoped leaderboard (see DECISIONS.md, "Picks and a
+ * leaderboard") round out this pass. The host starts a pick (a prompt +
+ * 2-4 options), anyone can answer while it's open, the host locks then
+ * resolves it, and points land in the leaderboard below the chat panel.
+ * Realtime here (migration 0005) invalidates-and-refetches on any change
+ * to picks/pick_options/pick_entries rather than the surgical
+ * setQueryData chat uses — pick_options/pick_entries have no room_id
+ * column to filter Realtime's subscription on directly, so this just
+ * refetches the whole picks list on any change to any of the three
+ * tables. Fine at this scale; revisit if a room ever has dozens of picks.
  */
 
 interface RoomParticipant {
@@ -76,6 +96,35 @@ interface RawMessage {
   createdAtISO: string;
 }
 
+interface RawPickOption {
+  id: string;
+  label: string;
+  votes: number;
+  pct: number;
+}
+
+interface RawPick {
+  id: string;
+  prompt: string;
+  status: "open" | "locked" | "resolved" | "void";
+  points: number;
+  resultOptionId: string | null;
+  options: RawPickOption[];
+  totalVotes: number;
+  myOptionId: string | null;
+}
+
+interface LeaderboardEntry {
+  key: string;
+  name: string;
+  points: number;
+}
+
+interface PicksResponse {
+  picks: RawPick[];
+  leaderboard: LeaderboardEntry[];
+}
+
 async function fetchRoom(code: string): Promise<RoomResponse> {
   const res = await fetch(`/api/rooms/${code}`);
   const data = await res.json();
@@ -99,6 +148,14 @@ async function fetchMessages(code: string): Promise<RawMessage[]> {
   const data = await res.json();
   if (!res.ok) throw new Error(data?.error ?? "Could not load chat.");
   return data.messages;
+}
+
+async function fetchPicks(code: string, myParticipantId: string | null): Promise<PicksResponse> {
+  const qs = myParticipantId ? `?participantId=${myParticipantId}` : "";
+  const res = await fetch(`/api/rooms/${code}/picks${qs}`);
+  const data = await res.json();
+  if (!res.ok) throw new Error(data?.error ?? "Could not load picks.");
+  return data;
 }
 
 export default function RoomPage() {
@@ -138,6 +195,12 @@ function RoomView() {
   const { data: rawMessages } = useQuery({
     queryKey: ["messages", code],
     queryFn: () => fetchMessages(code),
+    refetchInterval: 15000,
+  });
+
+  const { data: picksData } = useQuery({
+    queryKey: ["picks", code, myParticipantId],
+    queryFn: () => fetchPicks(code, myParticipantId),
     refetchInterval: 15000,
   });
 
@@ -185,6 +248,17 @@ function RoomView() {
             ];
           });
         }
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "picks", filter: `room_id=eq.${roomId}` },
+        () => queryClient.invalidateQueries({ queryKey: ["picks", code] })
+      )
+      .on("postgres_changes", { event: "*", schema: "public", table: "pick_options" }, () =>
+        queryClient.invalidateQueries({ queryKey: ["picks", code] })
+      )
+      .on("postgres_changes", { event: "*", schema: "public", table: "pick_entries" }, () =>
+        queryClient.invalidateQueries({ queryKey: ["picks", code] })
       )
       .subscribe();
 
@@ -354,12 +428,21 @@ function RoomView() {
         />
       )}
 
+      {myParticipantId && (
+        <PicksSection
+          code={code}
+          myParticipantId={myParticipantId}
+          isHost={participants.find((p) => p.id === myParticipantId)?.role === "host"}
+          data={picksData}
+        />
+      )}
+
       <div className="mt-6 rounded-tile border border-line bg-s1 p-4">
         <Pill tone="neutral">Preview</Pill>
         <p className="mt-2 font-ui text-[13px] text-mu">
           {myParticipantId
-            ? `This room is real — anyone with the code ${code} can join it from any device. Turn on your mic and camera above to be seen and heard, and chat below.`
-            : `This room is real — anyone with the code ${code} can join it from any device, and the list above updates live. Join to turn on your mic and camera, and to chat.`}
+            ? `This room is real — anyone with the code ${code} can join it from any device. Turn on your mic and camera above to be seen and heard, chat below, and the host can start picks.`
+            : `This room is real — anyone with the code ${code} can join it from any device, and the list above updates live. Join to turn on your mic and camera, chat, and answer picks.`}
         </p>
       </div>
 
@@ -468,5 +551,249 @@ function LiveParticipantGrid({
         </Button>
       </div>
     </>
+  );
+}
+
+/**
+ * Picks + the room-scoped leaderboard — see this file's top doc comment
+ * and api/rooms/[code]/picks's doc comment for the full reasoning (simple
+ * "custom"/"choice" picks only, host-run, no `season_scores` tie-in).
+ * `data` comes from the parent's react-query cache (kept live by both the
+ * safety-net poll and the Realtime subscription up there) rather than
+ * this component fetching its own copy.
+ */
+function PicksSection({
+  code,
+  myParticipantId,
+  isHost,
+  data,
+}: {
+  code: string;
+  myParticipantId: string;
+  isHost: boolean;
+  data: PicksResponse | undefined;
+}) {
+  const queryClient = useQueryClient();
+  const invalidate = () => queryClient.invalidateQueries({ queryKey: ["picks", code] });
+
+  const [creating, setCreating] = useState(false);
+  const [prompt, setPrompt] = useState("");
+  const [optionInputs, setOptionInputs] = useState(["", ""]);
+  const [working, setWorking] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [actingPickId, setActingPickId] = useState<string | null>(null);
+
+  function updateOption(i: number, value: string) {
+    setOptionInputs((prev) => prev.map((o, idx) => (idx === i ? value : o)));
+  }
+
+  async function handleCreate() {
+    const options = optionInputs.map((o) => o.trim()).filter(Boolean);
+    if (!prompt.trim() || options.length < 2) return;
+    setWorking(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/rooms/${code}/picks`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ participantId: myParticipantId, prompt: prompt.trim(), options }),
+      });
+      const resData = await res.json();
+      if (!res.ok) throw new Error(resData?.error ?? "Could not start that pick.");
+      setPrompt("");
+      setOptionInputs(["", ""]);
+      setCreating(false);
+      invalidate();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Something went wrong.");
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  async function handleSelect(pickId: string, optionId: string) {
+    setActingPickId(pickId);
+    try {
+      await fetch(`/api/rooms/${code}/picks/${pickId}/entry`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ participantId: myParticipantId, optionId }),
+      });
+      invalidate();
+    } catch {
+      // Best-effort — the safety-net poll picks this up if it silently failed.
+    } finally {
+      setActingPickId(null);
+    }
+  }
+
+  async function handleLock(pickId: string) {
+    setActingPickId(pickId);
+    try {
+      await fetch(`/api/rooms/${code}/picks/${pickId}/lock`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ participantId: myParticipantId }),
+      });
+      invalidate();
+    } finally {
+      setActingPickId(null);
+    }
+  }
+
+  async function handleResolve(pickId: string, resultOptionId: string) {
+    setActingPickId(pickId);
+    try {
+      await fetch(`/api/rooms/${code}/picks/${pickId}/resolve`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ participantId: myParticipantId, resultOptionId }),
+      });
+      invalidate();
+    } finally {
+      setActingPickId(null);
+    }
+  }
+
+  const picks = data?.picks ?? [];
+  const leaderboard = data?.leaderboard ?? [];
+
+  return (
+    <div className="mt-6">
+      <div className="flex items-center justify-between">
+        <p className="font-ui text-[13px] font-bold uppercase tracking-[0.06em] text-mu">Picks</p>
+        {isHost && (
+          <button
+            onClick={() => setCreating((v) => !v)}
+            className="flex items-center gap-1 font-ui text-[12px] font-semibold text-ac"
+          >
+            {creating ? (
+              <>
+                <X size={14} /> Cancel
+              </>
+            ) : (
+              <>
+                <Plus size={14} /> Start a pick
+              </>
+            )}
+          </button>
+        )}
+      </div>
+
+      {creating && (
+        <div className="mt-3 rounded-tile border border-line bg-s1 p-4">
+          <input
+            value={prompt}
+            onChange={(e) => setPrompt(e.target.value)}
+            placeholder="Next score: TD or FG?"
+            maxLength={140}
+            className="h-[44px] w-full rounded-control border border-line2 bg-s2 px-3 font-ui text-[14px] text-tx outline-none placeholder:text-mu2 focus:border-ac"
+          />
+          <div className="mt-2 flex flex-col gap-2">
+            {optionInputs.map((opt, i) => (
+              <input
+                key={i}
+                value={opt}
+                onChange={(e) => updateOption(i, e.target.value)}
+                placeholder={`Option ${i + 1}`}
+                maxLength={40}
+                className="h-[40px] rounded-control border border-line2 bg-s2 px-3 font-ui text-[13px] text-tx outline-none placeholder:text-mu2 focus:border-ac"
+              />
+            ))}
+          </div>
+          <div className="mt-2 flex items-center justify-between">
+            {optionInputs.length < 4 ? (
+              <button
+                onClick={() => setOptionInputs((prev) => [...prev, ""])}
+                className="font-ui text-[12px] font-semibold text-mu"
+              >
+                + Add option
+              </button>
+            ) : (
+              <span />
+            )}
+            {optionInputs.length > 2 && (
+              <button
+                onClick={() => setOptionInputs((prev) => prev.slice(0, -1))}
+                className="font-ui text-[12px] font-semibold text-mu"
+              >
+                Remove last
+              </button>
+            )}
+          </div>
+          <Button
+            variant="primary"
+            fullWidth
+            className="mt-3 h-11"
+            onClick={handleCreate}
+            disabled={working || !prompt.trim() || optionInputs.filter((o) => o.trim()).length < 2}
+          >
+            {working ? "Starting…" : "Start pick"}
+          </Button>
+          {error && <p className="mt-2 font-ui text-[12px] text-live">{error}</p>}
+        </div>
+      )}
+
+      <div className="mt-3 flex flex-col gap-3">
+        {picks.map((pick) => {
+          const options: ChoiceOption[] = pick.options.map((o) => ({
+            id: o.id,
+            label: o.label,
+            pct: o.pct,
+            selected: o.id === pick.myOptionId,
+          }));
+          return (
+            <div key={pick.id}>
+              <PickCard
+                kind="choice"
+                prompt={pick.prompt}
+                options={options}
+                totalVotes={pick.totalVotes}
+                locked={pick.status === "locked"}
+                resolved={pick.status === "resolved"}
+                resultOptionId={pick.resultOptionId ?? undefined}
+                onSelect={(optionId) => handleSelect(pick.id, optionId)}
+              />
+              {isHost && pick.status === "open" && (
+                <Button
+                  variant="secondary"
+                  fullWidth
+                  className="mt-2 h-10"
+                  onClick={() => handleLock(pick.id)}
+                  disabled={actingPickId === pick.id}
+                >
+                  Lock picks
+                </Button>
+              )}
+              {isHost && pick.status === "locked" && (
+                <div className="mt-2 rounded-tile border border-line bg-s1 p-3">
+                  <p className="mb-2 font-ui text-[12px] font-semibold text-mu">Mark the correct answer:</p>
+                  <div className="flex flex-wrap gap-2">
+                    {pick.options.map((o) => (
+                      <button
+                        key={o.id}
+                        onClick={() => handleResolve(pick.id, o.id)}
+                        disabled={actingPickId === pick.id}
+                        className="rounded-control border border-line2 bg-s2 px-3 py-1.5 font-ui text-[13px] font-medium text-tx disabled:opacity-40"
+                      >
+                        {o.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {leaderboard.length > 0 && (
+        <Leaderboard
+          className="mt-4"
+          title="Leaderboard"
+          rows={leaderboard.map((row, i) => ({ rank: i + 1, name: row.name, points: row.points }))}
+        />
+      )}
+    </div>
   );
 }
