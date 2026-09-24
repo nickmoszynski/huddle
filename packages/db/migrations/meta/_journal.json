@@ -22,6 +22,13 @@
       "when": 1790367600000,
       "tag": "0002_realtime_rooms",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1790261197707,
+      "tag": "0003_young_bishop",
+      "breakpoints": true
     }
   ]
 }

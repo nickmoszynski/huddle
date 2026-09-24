@@ -53,6 +53,14 @@ export const users = pgTable("users", {
   // Mirrors the Supabase Auth user id (auth.users.id); kept as a plain
   // column rather than an FK so this schema stays portable off Supabase.
   authId: uuid("auth_id").notNull(),
+  // Sleeper-style handle, e.g. "nickm" — claimed once via /signin, on top
+  // of anonymous auth (no email/password required to get one). Nullable
+  // because a `users` row can also be created in passing by hosting a room
+  // (apps/web/app/api/rooms/route.ts POST) without ever visiting /signin;
+  // that row just has no username (and can't use Groups/Profile) until its
+  // owner claims one. A unique index still works with nulls in Postgres —
+  // multiple null usernames don't collide, only real claimed values do.
+  username: text("username"),
   displayName: text("display_name").notNull(),
   email: text("email"),
   phone: text("phone"),
@@ -60,6 +68,7 @@ export const users = pgTable("users", {
   createdAt: createdAt(),
 }, (t) => ({
   authIdIdx: uniqueIndex("users_auth_id_idx").on(t.authId),
+  usernameIdx: uniqueIndex("users_username_idx").on(t.username),
 }));
 
 export const guestSessions = pgTable("guest_sessions", {

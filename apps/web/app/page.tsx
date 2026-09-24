@@ -1,10 +1,10 @@
 "use client";
 
-import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { brand } from "@huddle/brand";
-import { Button, Pill, TabBar, type BottomTab } from "@huddle/ui";
+import { Button, Pill, TabBar } from "@huddle/ui";
+import { TAB_PATHS } from "@/lib/tabs";
 import type { ScheduleGame, ScheduleResponse } from "./api/schedule/route";
 
 /** Builds the /create URL, carrying the real game details along as query
@@ -24,9 +24,9 @@ function createRoomUrlForGame(game: ScheduleGame): string {
 
 /**
  * Home — hero, CTAs, tonight's event, crew strip, sign-off tagline
- * (handoff §3.1 / board 1 "1. HOME"). Full routing (Sign in gate, Groups,
- * Explore, Profile pages) still lands in Phase 2 proper; Start/Join/Start
- * watch party route into real, database-backed rooms now (see DECISIONS.md).
+ * (handoff §3.1 / board 1 "1. HOME"). Start/Join/Start watch party route
+ * into real, database-backed rooms; the TabBar now routes to real Groups,
+ * Explore, and Profile pages too (see DECISIONS.md, "Groups/Explore/Profile").
  */
 
 async function fetchSchedule(): Promise<ScheduleResponse> {
@@ -36,7 +36,6 @@ async function fetchSchedule(): Promise<ScheduleResponse> {
 }
 
 export default function HomePage() {
-  const [tab, setTab] = useState<BottomTab>("home");
   const router = useRouter();
 
   const { data, isLoading } = useQuery({
@@ -108,7 +107,11 @@ export default function HomePage() {
         </p>
       </main>
 
-      <TabBar value={tab} onChange={setTab} className="fixed inset-x-0 bottom-0 mx-auto max-w-phone" />
+      <TabBar
+        value="home"
+        onChange={(tab) => router.push(TAB_PATHS[tab])}
+        className="fixed inset-x-0 bottom-0 mx-auto max-w-phone"
+      />
     </div>
   );
 }
