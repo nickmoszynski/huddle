@@ -1,17 +1,23 @@
 "use client";
 
-import { Suspense, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button, Pill, VideoTile } from "@huddle/ui";
+import { getSupabaseBrowserClient } from "@/lib/supabaseClient";
 
 /**
  * The room screen — backed by the real database now (see DECISIONS.md,
- * "Real rooms via Supabase"). Polls every few seconds instead of using
- * Supabase Realtime (not wired up yet), so a friend joining from another
- * device shows up here within a few seconds rather than instantly. Video,
- * audio, and chat still aren't wired up (LiveKit isn't connected yet) —
- * this deliberately says so rather than faking a live multi-person call.
+ * "Real rooms via Supabase"). Live updates come from Supabase Realtime
+ * (see DECISIONS.md, "Realtime for room_participants"): subscribed to
+ * postgres_changes on `room_participants` for this room's id, and any
+ * insert/update/delete triggers an immediate refetch of the room query.
+ * `refetchInterval` below is kept as a slow safety-net poll (not the
+ * primary update path anymore) in case a Realtime subscription silently
+ * drops — belt and suspenders, not a second copy of the same mechanism.
+ * Video, audio, and chat still aren't wired up (LiveKit isn't connected
+ * yet) — this deliberately says so rather than faking a live multi-person
+ * call.
  */
 
 interface RoomParticipant {
@@ -25,6 +31,7 @@ interface RoomParticipant {
 
 interface RoomResponse {
   room: {
+    id: string;
     code: string;
     name: string;
     status: string;
@@ -57,13 +64,46 @@ function RoomView() {
 
   const [copied, setCopied] = useState(false);
   const [leaving, setLeaving] = useState(false);
+  const queryClient = useQueryClient();
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["room", code],
     queryFn: () => fetchRoom(code),
-    refetchInterval: 4000,
+    refetchInterval: 20000, // safety-net poll — Realtime (below) is the primary path
     retry: false,
   });
+
+  const roomId = data?.room.id;
+
+  // Live updates: subscribe to changes on this room's participants and
+  // refetch immediately when someone joins/leaves, instead of waiting on
+  // the slow poll above. Requires the "Public read (realtime)" policy from
+  // migration 0002 — without it Realtime silently delivers nothing.
+  useEffect(() => {
+    if (!roomId) return;
+
+    let supabase;
+    try {
+      supabase = getSupabaseBrowserClient();
+    } catch {
+      return; // Supabase env vars missing — safety-net poll still works
+    }
+
+    const channel = supabase
+      .channel(`room-${roomId}`)
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "room_participants", filter: `room_id=eq.${roomId}` },
+        () => {
+          queryClient.invalidateQueries({ queryKey: ["room", code] });
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [roomId, code, queryClient]);
 
   async function handleCopy() {
     try {
@@ -154,9 +194,8 @@ function RoomView() {
       <div className="mt-8 rounded-tile border border-line bg-s1 p-4">
         <Pill tone="neutral">Preview</Pill>
         <p className="mt-2 font-ui text-[13px] text-mu">
-          This room is real — anyone with the code {code} can join it from any device, and the list above refreshes
-          every few seconds. Video, audio, and chat aren't connected yet (LiveKit isn't wired up), so mic/camera stay
-          off for now.
+          This room is real — anyone with the code {code} can join it from any device, and the list above updates
+          live. Video, audio, and chat aren't connected yet (LiveKit isn't wired up), so mic/camera stay off for now.
         </p>
       </div>
 

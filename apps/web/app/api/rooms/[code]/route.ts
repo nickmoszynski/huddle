@@ -35,6 +35,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ cod
 
     return NextResponse.json({
       room: {
+        id: row.room.id,
         code: row.room.code,
         name: row.room.name,
         status: row.room.status,
