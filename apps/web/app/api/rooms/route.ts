@@ -23,6 +23,11 @@ const gameSchema = z.object({
   homeName: z.string().min(1),
   awayName: z.string().min(1),
   startTimeISO: z.string().min(1),
+  // Which schedule source this came from ("nfl" | "mlb" | "wwe" | ...)
+  // and a display-label override for a non-team event like "WWE Raw" —
+  // see DECISIONS.md, "Explore: browse by league".
+  league: z.string().min(1).optional(),
+  title: z.string().min(1).optional(),
 });
 
 const bodySchema = z.object({
@@ -59,6 +64,8 @@ export async function POST(req: NextRequest) {
                 homeName: game.homeName,
                 awayName: game.awayName,
                 startTime: new Date(game.startTimeISO),
+                league: game.league,
+                title: game.title,
               }
             : {
                 // No specific game — an ad hoc watch party. Each one gets
@@ -87,7 +94,7 @@ export async function POST(req: NextRequest) {
 
     // 3. Create the room itself.
     const code = await generateUniqueRoomCode();
-    const roomName = game ? `${game.awayName} @ ${game.homeName}` : "Watch Party";
+    const roomName = game ? game.title ?? `${game.awayName} @ ${game.homeName}` : "Watch Party";
     const [room] = await db
       .insert(rooms)
       .values({

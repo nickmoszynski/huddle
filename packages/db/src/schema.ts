@@ -141,6 +141,15 @@ export const events = pgTable("events", {
   awayName: text("away_name").notNull(),
   startTime: timestamp("start_time", { withTimezone: true }).notNull(),
   status: text("status").notNull().default("scheduled"), // scheduled|pregame|live|halftime|final|overtime
+  // Nullable, added for Explore's multi-league schedule (see DECISIONS.md,
+  // "Explore: browse by league"). `league` tags which schedule source an
+  // event came from ("nfl" | "mlb" | "wwe" | ... — not an enum, so a new
+  // league never needs a migration). `title` overrides the default
+  // "awayName @ homeName" display for events that aren't a two-team
+  // matchup (e.g. "WWE Raw") — every display site falls back to
+  // away@home when it's null, so this is fully backward compatible.
+  league: text("league"),
+  title: text("title"),
 }, (t) => ({
   providerIdx: uniqueIndex("events_provider_event_id_idx").on(t.providerEventId),
 }));

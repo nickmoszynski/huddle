@@ -5,22 +5,8 @@ import { useQuery } from "@tanstack/react-query";
 import { brand } from "@huddle/brand";
 import { Button, Pill, TabBar } from "@huddle/ui";
 import { TAB_PATHS } from "@/lib/tabs";
+import { createRoomUrlForGame } from "@/lib/createRoomUrl";
 import type { ScheduleGame, ScheduleResponse } from "./api/schedule/route";
-
-/** Builds the /create URL, carrying the real game details along as query
- * params so the room that gets created there is tied to a real event
- * (see apps/web/app/api/rooms/route.ts). */
-function createRoomUrlForGame(game: ScheduleGame): string {
-  const params = new URLSearchParams({
-    providerEventId: game.id,
-    homeAbbr: game.homeAbbr,
-    awayAbbr: game.awayAbbr,
-    homeName: game.homeTeam,
-    awayName: game.awayTeam,
-    startTime: game.dateISO,
-  });
-  return `/create?${params.toString()}`;
-}
 
 /**
  * Home — hero, CTAs, tonight's event, crew strip, sign-off tagline
@@ -75,7 +61,12 @@ export default function HomePage() {
         <section className="mt-9">
           <div className="mb-3 flex items-center justify-between">
             <h2 className="font-ui text-[13px] font-bold uppercase tracking-[0.06em] text-mu">{sectionLabel}</h2>
-            <span className="font-ui text-[12px] font-semibold text-ac">See all</span>
+            <button
+              onClick={() => router.push("/explore")}
+              className="font-ui text-[12px] font-semibold text-ac"
+            >
+              See all
+            </button>
           </div>
 
           {isLoading ? (
@@ -89,7 +80,19 @@ export default function HomePage() {
                 variant="primary"
                 fullWidth
                 className="mt-3 h-11"
-                onClick={() => router.push(createRoomUrlForGame(game))}
+                onClick={() =>
+                  router.push(
+                    createRoomUrlForGame({
+                      id: game.id,
+                      league: "nfl",
+                      homeAbbr: game.homeAbbr,
+                      awayAbbr: game.awayAbbr,
+                      homeName: game.homeTeam,
+                      awayName: game.awayTeam,
+                      dateISO: game.dateISO,
+                    })
+                  )
+                }
               >
                 Start watch party
               </Button>

@@ -24,6 +24,11 @@ import { useSession } from "@/lib/session";
  * "Make this room public" (see DECISIONS.md, "Public rooms show up in
  * Explore") sets `rooms.privacy = 'public'` instead of the default
  * `'private'` — that's the only thing Explore's room list filters on.
+ *
+ * `league`/`title` are optional query params carried through from
+ * Explore's multi-league game list (see DECISIONS.md, "Explore: browse
+ * by league") — they tag which schedule source the event came from and
+ * override the default "away @ home" label for something like WWE.
  */
 export default function CreateRoomPage() {
   return (
@@ -43,8 +48,13 @@ function CreateRoomForm() {
   const homeName = searchParams.get("homeName");
   const awayName = searchParams.get("awayName");
   const startTime = searchParams.get("startTime");
+  const league = searchParams.get("league");
+  const title = searchParams.get("title");
   const hasGame = Boolean(providerEventId && homeAbbr && awayAbbr && homeName && awayName && startTime);
-  const gameLabel = hasGame ? `${awayName} @ ${homeName}` : undefined;
+  // `title` overrides "away @ home" for an event that isn't a two-team
+  // matchup (e.g. "WWE Raw" — see api/games/route.ts and DECISIONS.md,
+  // "Explore: browse by league").
+  const gameLabel = hasGame ? title || `${awayName} @ ${homeName}` : undefined;
 
   const { isSignedIn, user } = useSession();
   const [name, setName] = useState(() => getStoredDisplayName());
@@ -68,7 +78,16 @@ function CreateRoomForm() {
           displayName,
           privacy: isPublic ? "public" : "private",
           game: hasGame
-            ? { providerEventId, homeAbbr, awayAbbr, homeName, awayName, startTimeISO: startTime }
+            ? {
+                providerEventId,
+                homeAbbr,
+                awayAbbr,
+                homeName,
+                awayName,
+                startTimeISO: startTime,
+                league: league || undefined,
+                title: title || undefined,
+              }
             : undefined,
         }),
       });

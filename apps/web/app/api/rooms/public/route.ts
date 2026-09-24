@@ -31,7 +31,13 @@ export async function GET() {
         code: room.code,
         name: room.name,
         status: room.status,
-        event: { homeName: event.homeName, awayName: event.awayName, startTimeISO: event.startTime.toISOString() },
+        event: {
+          homeName: event.homeName,
+          awayName: event.awayName,
+          startTimeISO: event.startTime.toISOString(),
+          league: event.league,
+          title: event.title,
+        },
       })),
     });
   } catch (err) {
