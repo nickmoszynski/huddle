@@ -3,6 +3,7 @@ export * from "./Button";
 export * from "./Segmented";
 export * from "./Switch";
 export * from "./Avatar";
+export * from "./LeagueBadge";
 export * from "./Pill";
 export * from "./Tabs";
 export * from "./Sheet";
